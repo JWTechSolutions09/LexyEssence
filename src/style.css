@@ -47,7 +47,6 @@ h1, h2, .brand { font-family: "Playfair Display", "Noto Serif", serif; }
   justify-content: space-between;
   padding: 0 1.5rem;
   backdrop-filter: blur(16px);
-  overflow: hidden;
 }
 
 .topbar-left,
@@ -118,7 +117,6 @@ h1, h2, .brand { font-family: "Playfair Display", "Noto Serif", serif; }
   padding: 1rem 0.8rem;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 
 .sidebar h2 {
@@ -520,44 +518,6 @@ button.ghost {
   font-size: 0.8rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-.floating-botanical {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 20;
-}
-.floating-botanical span {
-  position: fixed;
-  font-size: 1.05rem;
-  opacity: 0.35;
-  animation: floatBloom 9s ease-in-out infinite;
-}
-/* Navbar flowers (arriba, bordes laterales) */
-.floating-botanical span:nth-child(1) { left: 12px; top: 22px; animation-delay: 0s; }
-.floating-botanical span:nth-child(2) { right: 16px; top: 20px; animation-delay: 1.2s; }
-/* Sidebar flowers (borde izquierdo y borde interno) */
-.floating-botanical span:nth-child(3) { left: 10px; top: 140px; animation-delay: 2.4s; }
-.floating-botanical span:nth-child(4) { left: 248px; top: 220px; animation-delay: 3.6s; }
-
-.topbar::before,
-.topbar::after,
-.sidebar::before,
-.sidebar::after {
-  content: "❀";
-  position: absolute;
-  color: rgba(255, 215, 234, 0.35);
-  font-size: 0.9rem;
-  pointer-events: none;
-}
-
-.topbar::before { left: 8px; bottom: 8px; }
-.topbar::after { right: 10px; bottom: 8px; }
-.sidebar::before { left: 8px; top: 70px; }
-.sidebar::after { right: 8px; bottom: 14px; }
-@keyframes floatBloom {
-  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.28; }
-  50% { transform: translateY(-12px) rotate(8deg); opacity: 0.62; }
 }
 
 .inventory-screen,

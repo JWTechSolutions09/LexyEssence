@@ -3,12 +3,6 @@ import { NavLink } from "react-router-dom";
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="app-shell">
-      <div className="floating-botanical">
-        <span>🌸</span>
-        <span>🌷</span>
-        <span>🌹</span>
-        <span>🪴</span>
-      </div>
       <header className="topbar">
         <div className="topbar-left">
           <img className="brand-logo-img" src="/logo.jpeg" alt="Logo Lexy Essence" />
