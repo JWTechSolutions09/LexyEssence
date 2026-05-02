@@ -105,6 +105,13 @@ h1, h2, .brand { font-family: "Playfair Display", "Noto Serif", serif; }
   color: #ffd3e8;
   padding: 0.3rem;
 }
+.mobile-menu-btn {
+  display: none;
+  border: none;
+  background: transparent;
+  color: #ffd3e8;
+  padding: 0.2rem;
+}
 
 .sidebar {
   position: fixed;
@@ -117,6 +124,7 @@ h1, h2, .brand { font-family: "Playfair Display", "Noto Serif", serif; }
   padding: 1rem 0.8rem;
   display: flex;
   flex-direction: column;
+  z-index: 70;
 }
 
 .sidebar h2 {
@@ -173,6 +181,9 @@ h1, h2, .brand { font-family: "Playfair Display", "Noto Serif", serif; }
 .content {
   margin-left: 260px;
   padding: 100px 1.5rem 1.5rem;
+}
+.mobile-backdrop {
+  display: none;
 }
 
 h1 {
@@ -566,15 +577,31 @@ select {
 }
 
 @media (max-width: 1024px) {
+  .mobile-menu-btn { display: inline-flex; }
   .topbar-links,
   .search-wrap { display: none; }
   .content { margin-left: 0; padding-top: 90px; }
   .sidebar {
-    position: static;
-    width: 100%;
-    height: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    top: 76px;
+    left: 0;
+    width: min(82vw, 320px);
+    height: calc(100vh - 76px);
+    border-right: 1px solid var(--border);
+    border-bottom: none;
+    transform: translateX(-105%);
+    transition: transform 220ms ease;
+  }
+  .sidebar.mobile-open { transform: translateX(0); }
+  .mobile-backdrop {
+    display: block;
+    position: fixed;
+    inset: 76px 0 0 0;
+    border: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+    background: rgba(45, 24, 50, 0.32);
+    z-index: 65;
   }
   .app-shell { padding-top: 76px; }
   .grid,

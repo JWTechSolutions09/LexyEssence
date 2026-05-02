@@ -25,6 +25,12 @@ export function AgendaPage() {
     setNotice("Agenda limpiada.");
   }
 
+  function viewAppointments() {
+    setFilterText("");
+    setServiceFilter("Todos");
+    setNotice(`Visualizando ${appointments.length} cita(s).`);
+  }
+
   return (
     <section className="agenda-screen">
       <div className="row">
@@ -33,8 +39,9 @@ export function AgendaPage() {
           <p className="muted">Planificación diaria de citas y servicios.</p>
         </div>
         <div className="actions">
+          <button className="ghost" onClick={viewAppointments}>Ver citas</button>
+          <button onClick={addAppointment}>Agendar cita</button>
           <button className="ghost" onClick={clearAgenda}>Limpiar agenda</button>
-          <button onClick={addAppointment}>Reservar cita</button>
         </div>
       </div>
       <div className="agenda-kpis">

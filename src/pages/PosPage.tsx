@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import type { Product, Transaction } from "../types/domain";
 import { currency } from "../utils/format";
@@ -14,8 +14,16 @@ export function PosPage() {
     setCashierOpen,
     setNotice,
   } = useAppContext();
+  const [categoryFilter, setCategoryFilter] = useState("Todos");
 
   const total = useMemo(() => cart.reduce((acc, item) => acc + item.precio * item.cantidad, 0), [cart]);
+  const visibleProducts = products.filter((product) => {
+    if (categoryFilter === "Todos") return true;
+    if (categoryFilter === "Servicios") return product.categoria.toLowerCase().includes("serv");
+    if (categoryFilter === "Cuidado de Piel") return product.categoria.toLowerCase().includes("piel");
+    if (categoryFilter === "Fragancias") return product.categoria.toLowerCase().includes("frag");
+    return true;
+  });
 
   function addToCart(product: Product) {
     if (product.stock <= 0) {
@@ -76,20 +84,20 @@ export function PosPage() {
       <section className="pos-catalog">
         <div className="row">
           <div className="actions">
-            <button>All Items</button>
-            <button className="ghost">Services</button>
-            <button className="ghost">Skincare</button>
-            <button className="ghost">Fragrances</button>
+            <button className={categoryFilter === "Todos" ? "" : "ghost"} onClick={() => setCategoryFilter("Todos")}>Todos</button>
+            <button className={categoryFilter === "Servicios" ? "" : "ghost"} onClick={() => setCategoryFilter("Servicios")}>Servicios</button>
+            <button className={categoryFilter === "Cuidado de Piel" ? "" : "ghost"} onClick={() => setCategoryFilter("Cuidado de Piel")}>Cuidado de Piel</button>
+            <button className={categoryFilter === "Fragancias" ? "" : "ghost"} onClick={() => setCategoryFilter("Fragancias")}>Fragancias</button>
           </div>
-          <div className="muted">Showing {products.length} Results</div>
+          <div className="muted">Mostrando {visibleProducts.length} resultados</div>
         </div>
         <div className="pos-grid">
-          {products.map((p) => (
+          {visibleProducts.map((p) => (
             <article className="pos-product-card" key={p.id}>
               <div className="pos-product-hero">
                 <div className="pos-product-overlay" />
                 <div className="pos-product-brand">{p.nombre.split(" ")[0].toUpperCase()}</div>
-                <span className="pos-stock">{p.stock > 0 ? "In Stock" : "Out of Stock"}</span>
+                <span className="pos-stock">{p.stock > 0 ? "En Stock" : "Sin Stock"}</span>
               </div>
               <div className="pos-product-content">
                 <h3>{p.nombre}</h3>
@@ -109,12 +117,12 @@ export function PosPage() {
       <aside className="pos-cart-panel">
         <div className="pos-cart-head">
           <div className="row">
-            <h2>Current Sale</h2>
-            <span className="badge">{cart.length} ITEMS</span>
+            <h2>Venta Actual</h2>
+            <span className="badge">{cart.length} ARTÍCULOS</span>
           </div>
           <div className="row">
-            <span className="muted">Walking-in Customer</span>
-            <button className="ghost" onClick={() => setNotice("Edit customer (demo).")}>Edit</button>
+            <span className="muted">Cliente sin cita</span>
+            <button className="ghost" onClick={() => setNotice("Editar cliente (demo).")}>Editar</button>
           </div>
         </div>
         <div className="pos-cart-items">
@@ -138,22 +146,22 @@ export function PosPage() {
         </div>
         <div className="pos-cart-footer">
           <div className="row"><span>Subtotal</span><span>{currency(total)}</span></div>
-          <div className="row"><span>Tax (8%)</span><span>{currency(total * 0.08)}</span></div>
-          <div className="row"><span>Discount</span><span>{currency(0)}</span></div>
+          <div className="row"><span>Impuesto (8%)</span><span>{currency(total * 0.08)}</span></div>
+          <div className="row"><span>Descuento</span><span>{currency(0)}</span></div>
           <div className="row">
-            <strong>Total Amount</strong>
+            <strong>Monto Total</strong>
             <strong>{currency(total * 1.08)}</strong>
           </div>
           <div className="actions">
-            <button className="ghost" onClick={() => setNotice("Coupon flow (demo).")}>Add Coupon</button>
-            <button className="ghost" onClick={clearSale}>Clear</button>
+            <button className="ghost" onClick={() => setNotice("Flujo de cupón (demo).")}>Agregar Cupón</button>
+            <button className="ghost" onClick={clearSale}>Limpiar</button>
           </div>
-          <button onClick={completeSale}>Complete Sale</button>
+          <button onClick={completeSale}>Completar Venta</button>
           <div className="actions">
-            <button className="ghost" onClick={() => { setCashierOpen(true); setNotice("Cashier opened."); }}>Open Cashier</button>
-            <button className="ghost" onClick={() => { setCashierOpen(false); setNotice("Cashier closed."); }}>Close Cashier</button>
+            <button className="ghost" onClick={() => { setCashierOpen(true); setNotice("Caja abierta."); }}>Abrir Caja</button>
+            <button className="ghost" onClick={() => { setCashierOpen(false); setNotice("Caja cerrada."); }}>Cerrar Caja</button>
           </div>
-          <p className="muted">Cashier: {cashierOpen ? "Open" : "Closed"}</p>
+          <p className="muted">Caja: {cashierOpen ? "Abierta" : "Cerrada"}</p>
         </div>
       </aside>
     </section>

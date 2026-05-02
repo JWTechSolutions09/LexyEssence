@@ -16,7 +16,7 @@ export function HomePage() {
         <div className="home-hero-brand">
           <img src="/logo.jpeg" alt="Logo Lexy Essence" />
           <div>
-            <p className="home-badge">Salon & Beauty Management</p>
+            <p className="home-badge">Gestión de Salón y Belleza</p>
             <h1>Panel General</h1>
           </div>
         </div>
