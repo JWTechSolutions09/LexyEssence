@@ -1,16 +1,41 @@
 import { useEffect, useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { AppDataGate } from "./AppDataGate";
 import { useAppContext } from "../context/AppContext";
+import { useAuth } from "../context/AuthContext";
 
-export function Layout({ children }: { children: React.ReactNode }) {
+const adminNavItems = [
+  { to: "/", label: "Inicio", icon: "dashboard" },
+  { to: "/punto-venta", label: "Punto de Venta", icon: "point_of_sale" },
+  { to: "/inventario", label: "Inventario", icon: "inventory_2" },
+  { to: "/reportes", label: "Reportes", icon: "analytics" },
+  { to: "/agenda", label: "Agenda", icon: "event" },
+  { to: "/configuracion", label: "Configuracion", icon: "settings" },
+];
+
+const cajaNavItems = [
+  { to: "/punto-venta", label: "Punto de Venta", icon: "point_of_sale" },
+  { to: "/inventario", label: "Inventario", icon: "inventory_2" },
+  { to: "/agenda", label: "Agenda", icon: "event" },
+];
+
+export function Layout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { setNotice } = useAppContext();
+  const { setNotice, isAppSaving } = useAppContext();
+  const { user, isAdmin, logout } = useAuth();
+
+  const navItems = isAdmin ? adminNavItems : cajaNavItems;
 
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
+
+  function handleLogout() {
+    logout();
+    navigate("/login", { replace: true });
+  }
 
   return (
     <div className="app-shell">
@@ -26,54 +51,72 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </button>
           <img className="brand-logo-img" src="/logo.jpeg" alt="Logo Lexy Essence" />
           <span className="brand">Lexy Essence</span>
-          <nav className="topbar-links">
-            <NavLink to="/reportes">Reportes de Caja</NavLink>
-            <NavLink to="/inventario">Inventario</NavLink>
-            <NavLink to="/punto-venta">Punto de Venta</NavLink>
-          </nav>
+          {isAdmin && (
+            <nav className="topbar-links">
+              <NavLink to="/reportes">Reportes</NavLink>
+              <NavLink to="/inventario">Inventario</NavLink>
+              <NavLink to="/punto-venta">Punto de Venta</NavLink>
+            </nav>
+          )}
         </div>
         <div className="topbar-right">
-          <div className="search-wrap">
-            <span className="material-symbols-outlined">search</span>
-            <input placeholder="Buscar productos o servicios..." />
-          </div>
-          <button
-            className="icon-btn"
-            type="button"
-            aria-label="Notificaciones"
-            onClick={() => setNotice("No tienes notificaciones nuevas.")}
-          >
-            <span className="material-symbols-outlined">notifications</span>
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            aria-label="Recibos"
-            onClick={() => navigate("/reportes")}
-          >
-            <span className="material-symbols-outlined">receipt_long</span>
+          {isAdmin && (
+            <div className="search-wrap">
+              <span className="material-symbols-outlined">search</span>
+              <input placeholder="Buscar productos o servicios..." />
+            </div>
+          )}
+          <span className="topbar-user muted">
+            {user?.displayName}
+            {isAppSaving && <span className="db-saving-badge"> · Guardando...</span>}
+          </span>
+          {isAdmin && (
+            <>
+              <button
+                className="icon-btn"
+                type="button"
+                aria-label="Notificaciones"
+                onClick={() => setNotice("No tienes notificaciones nuevas.")}
+              >
+                <span className="material-symbols-outlined">notifications</span>
+              </button>
+              <button
+                className="icon-btn"
+                type="button"
+                aria-label="Recibos"
+                onClick={() => navigate("/reportes")}
+              >
+                <span className="material-symbols-outlined">receipt_long</span>
+              </button>
+            </>
+          )}
+          <button className="ghost topbar-logout-btn" type="button" onClick={handleLogout}>
+            Salir
           </button>
         </div>
       </header>
       <aside className={`sidebar ${mobileMenuOpen ? "mobile-open" : ""}`}>
-        <div className="sidebar-brand">
-          <img className="sidebar-logo-img" src="/logo.jpeg" alt="Logo Lexy Essence" />
-          <h2>Lexy Essence</h2>
-        </div>
-        <p>Suite de Gestión</p>
         <nav>
-          <NavLink to="/" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">dashboard</span>Inicio</NavLink>
-          <NavLink to="/punto-venta" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">point_of_sale</span>Punto de Venta</NavLink>
-          <NavLink to="/inventario" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">inventory_2</span>Inventario</NavLink>
-          <NavLink to="/reportes" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">analytics</span>Reportes</NavLink>
-          <NavLink to="/agenda" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">event</span>Agenda</NavLink>
-          <NavLink to="/proveedores" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">conveyor_belt</span>Proveedores</NavLink>
-          <NavLink to="/configuracion" onClick={() => setMobileMenuOpen(false)}><span className="material-symbols-outlined">settings</span>Configuración</NavLink>
+          {navItems.map((item) => (
+            <NavLink key={item.to} to={item.to} onClick={() => setMobileMenuOpen(false)}>
+              <span className="material-symbols-outlined">{item.icon}</span>
+              {item.label}
+            </NavLink>
+          ))}
         </nav>
-        <button className="sidebar-cta" type="button" onClick={() => navigate("/punto-venta")}>Nueva Venta</button>
+        <button className="sidebar-cta" type="button" onClick={() => navigate("/punto-venta")}>
+          Nueva Venta
+        </button>
+        <button className="ghost sidebar-logout-btn" type="button" onClick={handleLogout}>
+          Cerrar sesion
+        </button>
       </aside>
       {mobileMenuOpen ? <button className="mobile-backdrop" onClick={() => setMobileMenuOpen(false)} aria-label="Cerrar menu" /> : null}
-      <main className="content">{children}</main>
+      <main className="content">
+        <AppDataGate>
+          <Outlet />
+        </AppDataGate>
+      </main>
     </div>
   );
 }

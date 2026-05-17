@@ -1,7 +1,11 @@
-import type { Appointment, Product, Supplier, Transaction } from "../types/domain";
-import { toLocalDateKey } from "../utils/agendaSlots";
+export const seedUsers = [
+  { id: "user-jere", username: "JereD02", password: "Mjere02", displayName: "Jeremias", role: "admin" as const, active: true },
+  { id: "user-gexa", username: "GexaD01", password: "Mgexa01", displayName: "Gexandra", role: "admin" as const, active: true },
+  { id: "user-admin", username: "admin", password: "admin090304", displayName: "Administrador", role: "admin" as const, active: true },
+  { id: "user-caja", username: "Caja", password: "Caja01", displayName: "Caja", role: "caja" as const, active: true },
+];
 
-export const initialProducts: Product[] = [
+export const seedProducts = [
   {
     id: "LEX-GS-001",
     nombre: "Elixir Rosa Medianoche",
@@ -50,27 +54,4 @@ export const initialProducts: Product[] = [
     stock: 142,
     stockMinimo: 30,
   },
-];
-
-export const initialTransactions: Transaction[] = [];
-
-const today = typeof window !== "undefined" ? toLocalDateKey() : "2026-01-01";
-
-export const initialAppointments: Appointment[] = [];
-
-export const initialAppointmentsDemo: Appointment[] = [
-  {
-    id: "apt-1",
-    date: today,
-    hora: "10:00",
-    cliente: "Julianne Smith",
-    servicios: ["lavado", "secado"],
-    total: 1250,
-  },
-];
-
-export const initialSuppliers: Supplier[] = [
-  { id: "SUP-001", nombre: "Rose Beauty Imports", contacto: "ventas@rosebeauty.com", estado: "Activo" },
-  { id: "SUP-002", nombre: "Skincare Elite DR", contacto: "contacto@skincareelite.do", estado: "Activo" },
-  { id: "SUP-003", nombre: "Nova Salon Tools", contacto: "hola@novasalontools.com", estado: "Pendiente" },
 ];
