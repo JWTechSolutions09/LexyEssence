@@ -22,18 +22,16 @@ const appUrl = `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`;
 console.log("[store] Iniciando Lexy Essence en modo tienda...");
 console.log(`[store] Abre en el navegador: ${appUrl}`);
 
-const child = spawn(
-  process.platform === "win32" ? "npx.cmd" : "npx",
-  ["tsx", "server/index.ts"],
-  {
-    cwd: rootDir,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      SERVE_STATIC: "1",
-    },
+const tsxCli = path.join(rootDir, "node_modules", "tsx", "dist", "cli.mjs");
+
+const child = spawn(process.execPath, [tsxCli, "server/index.ts"], {
+  cwd: rootDir,
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    SERVE_STATIC: "1",
   },
-);
+});
 
 child.on("exit", (code) => {
   process.exit(code ?? 0);
