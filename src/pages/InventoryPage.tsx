@@ -69,6 +69,7 @@ export function InventoryPage() {
   const [formError, setFormError] = useState("");
   const [unknownScanDraft, setUnknownScanDraft] = useState<QuickScanDraft | null>(null);
   const [unknownScanError, setUnknownScanError] = useState("");
+  const [quickScanMode, setQuickScanMode] = useState(false);
 
   const categories = ["Todos", ...new Set([...baseCategories, ...products.map((product) => product.categoria)])];
 
@@ -299,21 +300,39 @@ export function InventoryPage() {
     if (!product) return;
 
     const delta = Math.max(1, product.stockMinimo || 5);
+    addStockUnits(product, delta, "Entrada + Stock");
+    setNotice("Stock actualizado correctamente.");
+  }
+
+  function addStockUnits(product: Product, quantity: number, motivo: string) {
+    if (quantity <= 0) return;
+
     setProducts((prev) => prev.map((entry) => (
-      entry.id === id
-        ? { ...entry, stock: entry.stock + delta }
+      entry.id === product.id
+        ? { ...entry, stock: entry.stock + quantity }
         : entry
     )));
     appendStockMovements([createStockMovement({
       tipo: "entrada",
       productId: product.id,
       nombre: product.nombre,
-      cantidad: delta,
-      motivo: "Entrada + Stock",
+      cantidad: quantity,
+      motivo,
       fecha: new Date().toISOString(),
     })]);
-    setNotice("Stock actualizado correctamente.");
     void forceSave();
+  }
+
+  function toggleQuickScanMode() {
+    setQuickScanMode((prev) => {
+      const next = !prev;
+      setNotice(
+        next
+          ? "Modo escaneo rapido activado. Cada escaneo suma +1 al stock."
+          : "Modo escaneo rapido desactivado.",
+      );
+      return next;
+    });
   }
 
   const registerScannedCode = useCallback((rawCode: string) => {
@@ -323,6 +342,11 @@ export function InventoryPage() {
     const product = findProductByCode(products, code);
     if (product) {
       setQuery(code);
+      if (isAdmin && quickScanMode) {
+        addStockUnits(product, 1, "Escaneo rapido");
+        setNotice(`+1 stock: ${product.nombre} (ahora ${product.stock + 1} unidades)`);
+        return;
+      }
       if (isAdmin) {
         openEditModal(product);
       }
@@ -342,7 +366,7 @@ export function InventoryPage() {
       precio: "0",
       stock: "1",
     });
-  }, [isAdmin, products, setNotice]);
+  }, [isAdmin, quickScanMode, products, setNotice]);
 
   const {
     scanInputRef,
@@ -400,7 +424,11 @@ export function InventoryPage() {
       <div className="row">
         <div>
           <h1>Inventario</h1>
-          <p className="muted">Escanea codigos con el lector USB o gestiona productos manualmente.</p>
+          <p className="muted">
+            {quickScanMode && isAdmin
+              ? "Modo escaneo rapido: cada codigo conocido suma +1 al stock. Los nuevos abren el registro rapido."
+              : "Escanea codigos con el lector USB o gestiona productos manualmente."}
+          </p>
         </div>
         <div className="actions">
           <button type="button" className="ghost" onClick={resetFilters}>Restablecer filtros</button>
@@ -466,11 +494,25 @@ export function InventoryPage() {
           />
           <button type="button" className="ghost" onClick={() => setQuery("")}>Limpiar busqueda</button>
         </div>
-        <div className="pos-scanner-status" role="status">
+        <div className="pos-scanner-status inventory-scanner-status" role="status">
           <span className="badge success">
             <span className="material-symbols-outlined">usb</span>
             Lector USB activo
           </span>
+          {isAdmin && (
+            <button
+              type="button"
+              className={quickScanMode ? "inventory-quick-scan-toggle active" : "inventory-quick-scan-toggle ghost"}
+              onClick={toggleQuickScanMode}
+              aria-pressed={quickScanMode}
+            >
+              <span className="material-symbols-outlined">barcode_reader</span>
+              Modo escaneo rapido
+            </button>
+          )}
+          {isAdmin && quickScanMode && (
+            <span className="badge warn">+1 por escaneo</span>
+          )}
         </div>
         <p className="muted">Mostrando {visible.length} de {products.length} productos.</p>
       </div>

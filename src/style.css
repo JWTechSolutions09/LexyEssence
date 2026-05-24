@@ -2231,6 +2231,25 @@ button.danger {
 .inventory-toolbar-extended {
   gap: 0.9rem;
 }
+.inventory-scanner-status {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.inventory-quick-scan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+}
+.inventory-quick-scan-toggle.active {
+  background: linear-gradient(135deg, #c45f96, #9b4d86);
+  border-color: transparent;
+  color: #fff;
+}
+.inventory-quick-scan-toggle .material-symbols-outlined {
+  font-size: 1.1rem;
+}
 
 .inventory-toolbar-main {
   display: grid;
