@@ -23,6 +23,8 @@ import {
 
 const WHOLESALE_CUSTOMER_VALUE = "Cliente Mayorista";
 
+const POS_CATALOG_PREVIEW = 6;
+
 const availabilityFilters = ["Todos", "Disponibles", "Stock bajo", "Agotados"] as const;
 const paymentMethods = ["Efectivo", "Tarjeta", "Transferencia", "Mixto"] as const;
 const customerOptions = [
@@ -101,6 +103,7 @@ export function PosPage() {
   const [wholesaleModalOpen, setWholesaleModalOpen] = useState(false);
   const [wholesaleClient, setWholesaleClient] = useState<WholesaleClient | null>(null);
   const [wholesaleDiscountPercent, setWholesaleDiscountPercent] = useState<WholesaleDiscountPercent | null>(null);
+  const [checkoutExtrasOpen, setCheckoutExtrasOpen] = useState(false);
   const scanInputRef = useRef<HTMLInputElement>(null);
   const unknownNameInputRef = useRef<HTMLInputElement>(null);
 
@@ -163,19 +166,31 @@ export function PosPage() {
   const discount = Math.min(Math.max(Number(discountInput) || 0, 0), subtotal);
   const total = Math.max(0, subtotal - discount);
 
-  const visibleProducts = useMemo(() => products.filter((product) => {
+  const searchQuery = search.trim().toLowerCase();
+
+  const filteredProducts = useMemo(() => products.filter((product) => {
     const categoryMatch = categoryFilter === "Todos" || product.categoria === categoryFilter;
     const availabilityMatch =
       availabilityFilter === "Todos"
       || (availabilityFilter === "Disponibles" && product.stock > product.stockMinimo)
       || (availabilityFilter === "Stock bajo" && product.stock > 0 && product.stock <= product.stockMinimo)
       || (availabilityFilter === "Agotados" && product.stock <= 0);
-    const searchMatch = `${product.nombre} ${product.id} ${product.marca} ${product.categoria}`
-      .toLowerCase()
-      .includes(search.toLowerCase());
+    const searchMatch = !searchQuery
+      || `${product.nombre} ${product.id} ${product.marca} ${product.categoria}`
+        .toLowerCase()
+        .includes(searchQuery);
 
     return categoryMatch && availabilityMatch && searchMatch;
-  }), [availabilityFilter, categoryFilter, products, search]);
+  }), [availabilityFilter, categoryFilter, products, searchQuery]);
+
+  const visibleProducts = useMemo(() => {
+    if (searchQuery) return filteredProducts;
+    return filteredProducts.slice(0, POS_CATALOG_PREVIEW);
+  }, [filteredProducts, searchQuery]);
+
+  const hiddenCatalogCount = searchQuery
+    ? 0
+    : Math.max(0, filteredProducts.length - visibleProducts.length);
 
   function getCartQty(productId: string) {
     return cart.find((item) => item.id === productId)?.cantidad ?? 0;
@@ -684,7 +699,7 @@ export function PosPage() {
         <div className="pos-header">
           <div>
             <h1>Punto de Venta</h1>
-            <p className="muted">Escanea con el lector USB (abre la caja primero) o busca en el catalogo.</p>
+            <p className="muted">Escanea codigos o busca por nombre, codigo o marca en el catalogo.</p>
           </div>
           <article className="card pos-cart-total-card">
             <span className="muted">En carrito</span>
@@ -708,7 +723,7 @@ export function PosPage() {
             <input
               className="pos-input"
               data-manual-input
-              placeholder="Buscar o escanear codigo aqui..."
+              placeholder="Buscar por nombre, codigo o marca..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={handleSearchKeyDown}
@@ -760,13 +775,21 @@ export function PosPage() {
             </div>
           </div>
 
-          <div className="row">
-            <span className="muted">Mostrando {visibleProducts.length} productos</span>
+          <div className="row pos-catalog-meta">
+            <span className="muted">
+              {searchQuery
+                ? `Resultados: ${visibleProducts.length} de ${filteredProducts.length}`
+                : hiddenCatalogCount > 0
+                  ? `Vista rapida: ${visibleProducts.length} de ${filteredProducts.length} productos`
+                  : `Mostrando ${visibleProducts.length} productos`}
+              {!searchQuery && hiddenCatalogCount > 0 && " · escribe para buscar mas"}
+            </span>
             <span className="muted">Modo de precio: {pricingMode === "detalle" ? "Cliente" : wholesaleDiscountPercent ? `Mayorista (${wholesaleDiscountPercent}% desc.)` : "Mayorista"}</span>
           </div>
         </div>
 
-        <div className="pos-grid">
+        <div className="pos-catalog-results">
+          <div className="pos-grid">
           {visibleProducts.map((product) => {
             const currentQty = getCartQty(product.id);
             const status = getProductStatus(product);
@@ -822,14 +845,15 @@ export function PosPage() {
           {visibleProducts.length === 0 && (
             <div className="card pos-empty-state">
               <h3>No se encontraron productos</h3>
-              <p className="muted">Prueba otra busqueda o cambia los filtros del catalogo.</p>
+              <p className="muted">Prueba por nombre, codigo o marca, o cambia los filtros.</p>
             </div>
           )}
+          </div>
         </div>
       </section>
 
       <aside className="pos-cart-panel">
-        <div className="pos-cart-head compact">
+        <div className="pos-cart-top">
           <div className="row pos-cart-title-row">
             <h2>Venta actual</h2>
             <span className={`badge ${cashierOpen ? "success" : "danger"}`}>
@@ -837,87 +861,70 @@ export function PosPage() {
             </span>
           </div>
 
-          <section className="pos-sale-section">
-            <h3 className="pos-section-label">Datos de la venta</h3>
-            <div className="pos-picker-grid">
-              <button
-                type="button"
-                className="pos-picker-trigger"
-                onClick={() => {
-                  if (wholesaleClient) {
-                    openWholesaleModal();
-                    return;
-                  }
-                  setSalePickerModal("customer");
-                }}
-              >
-                <span className="pos-picker-trigger-label">Cliente</span>
-                <span className="pos-picker-trigger-value">{customerDisplayLabel}</span>
-                <span className="material-symbols-outlined pos-picker-trigger-icon">expand_more</span>
-              </button>
-              <button
-                type="button"
-                className="pos-picker-trigger"
-                onClick={() => setSalePickerModal("payment")}
-              >
-                <span className="pos-picker-trigger-label">Metodo de pago</span>
-                <span className="pos-picker-trigger-value">{paymentMethodLabel}</span>
-                <span className="material-symbols-outlined pos-picker-trigger-icon">expand_more</span>
-              </button>
-            </div>
-          </section>
+          <div className="pos-cart-quick-picks">
+            <button
+              type="button"
+              className="pos-picker-trigger pos-picker-trigger-compact"
+              onClick={() => {
+                if (wholesaleClient) {
+                  openWholesaleModal();
+                  return;
+                }
+                setSalePickerModal("customer");
+              }}
+            >
+              <span className="pos-picker-trigger-label">Cliente</span>
+              <span className="pos-picker-trigger-value">{customerDisplayLabel}</span>
+              <span className="material-symbols-outlined pos-picker-trigger-icon">expand_more</span>
+            </button>
+            <button
+              type="button"
+              className="pos-picker-trigger pos-picker-trigger-compact"
+              onClick={() => setSalePickerModal("payment")}
+            >
+              <span className="pos-picker-trigger-label">Pago</span>
+              <span className="pos-picker-trigger-value">{paymentMethodLabel}</span>
+              <span className="material-symbols-outlined pos-picker-trigger-icon">expand_more</span>
+            </button>
+          </div>
 
-          <section className="pos-sale-section">
-            <h3 className="pos-section-label">Precio y caja</h3>
-            <div className="actions pos-toggle-group compact">
-              <button
-                type="button"
-                className={pricingMode === "detalle" ? "" : "ghost"}
-                onClick={() => {
-                  resetWholesaleSelection();
-                  setCustomerName("Cliente mostrador");
-                  setPricingMode("detalle");
-                }}
-              >
-                Cliente
-              </button>
-              <button
-                type="button"
-                className={pricingMode === "mayorista" ? "" : "ghost"}
-                onClick={openWholesaleModal}
-              >
-                Mayorista
-              </button>
-            </div>
-            {wholesaleClient && wholesaleDiscountPercent && (
-              <p className="pos-wholesale-active muted">
-                {wholesaleClient.salon} · {wholesaleDiscountPercent}% en todos los productos
-              </p>
-            )}
-            {currentCashSession && (
-              <p className="pos-cash-session-info muted">
-                Abierta: {formatDateTime(currentCashSession.openedAt)} ·
-                {" "}Fondo {currency(currentCashSession.openingAmount)}
-              </p>
-            )}
-            <div className="actions pos-drawer-actions">
-              <button type="button" className="ghost" onClick={requestOpenCash} disabled={cashierOpen}>
-                Abrir caja
-              </button>
-              <button type="button" className="ghost" onClick={requestCloseCash} disabled={!cashierOpen}>
-                Cerrar caja
-              </button>
-            </div>
-          </section>
+          <div className="actions pos-cart-toolbar">
+            <button
+              type="button"
+              className={pricingMode === "detalle" ? "" : "ghost"}
+              onClick={() => {
+                resetWholesaleSelection();
+                setCustomerName("Cliente mostrador");
+                setPricingMode("detalle");
+              }}
+            >
+              Detalle
+            </button>
+            <button
+              type="button"
+              className={pricingMode === "mayorista" ? "" : "ghost"}
+              onClick={openWholesaleModal}
+            >
+              Mayorista
+            </button>
+            <button type="button" className="ghost" onClick={requestOpenCash} disabled={cashierOpen}>
+              Abrir caja
+            </button>
+            <button type="button" className="ghost" onClick={requestCloseCash} disabled={!cashierOpen}>
+              Cerrar caja
+            </button>
+          </div>
 
-          <div className="pos-mini-summary">
+          {wholesaleClient && wholesaleDiscountPercent && (
+            <p className="pos-wholesale-active muted">
+              {wholesaleClient.salon} · {wholesaleDiscountPercent}% descuento
+            </p>
+          )}
+
+          <div className="pos-mini-summary pos-mini-summary-inline">
             <div>
               <span className="muted">Items</span>
               <strong>{cartItemCount}</strong>
-            </div>
-            <div>
-              <span className="muted">Subtotal</span>
-              <strong>{currency(subtotal)}</strong>
             </div>
             <div>
               <span className="muted">Total</span>
@@ -926,7 +933,13 @@ export function PosPage() {
           </div>
         </div>
 
-        <div className="pos-cart-items">
+        <div className="pos-cart-body">
+          <div className="pos-cart-items-head">
+            <h3 className="pos-cart-items-title">Productos en la venta</h3>
+            <span className="badge">{cartItemCount} {cartItemCount === 1 ? "item" : "items"}</span>
+          </div>
+
+          <div className="pos-cart-items">
           {cart.length === 0 && !lastReceipt && (
             <div className="pos-empty-state">
               <h3>Carrito vacio</h3>
@@ -935,7 +948,7 @@ export function PosPage() {
           )}
 
           {cart.map((item) => (
-            <div className="pos-cart-item compact" key={item.id}>
+            <div className="pos-cart-item" key={item.id}>
               <div className="row">
                 <div className="pos-item-meta">
                   <strong>{item.nombre}</strong>
@@ -980,65 +993,90 @@ export function PosPage() {
               </div>
             </div>
           )}
+          </div>
         </div>
 
-        <div className="pos-cart-footer compact">
-          <h3 className="pos-section-label">Cobro</h3>
-          {!wholesaleDiscountPercent && (
-            <label className="pos-field pos-field-full">
-              Descuento
-              <input
-                className="pos-input"
-                data-manual-input
-                type="number"
-                min="0"
-                step="0.01"
-                value={discountInput}
-                onChange={(event) => setDiscountInput(event.target.value)}
-                onBlur={handleCaptureBlur}
-                placeholder="0.00"
-              />
-            </label>
-          )}
+        <div className="pos-cart-footer">
+          <button
+            type="button"
+            className="ghost pos-footer-toggle"
+            onClick={() => setCheckoutExtrasOpen((open) => !open)}
+          >
+            <span className="material-symbols-outlined">
+              {checkoutExtrasOpen ? "expand_less" : "expand_more"}
+            </span>
+            {checkoutExtrasOpen ? "Ocultar descuento y nota" : "Descuento y nota"}
+          </button>
 
-          <label className="pos-field pos-field-full pos-note-field">
-            Nota de la venta
-            <textarea
-              className="pos-input pos-textarea pos-note-input"
-              data-manual-input
-              value={saleNote}
-              onChange={(event) => setSaleNote(event.target.value)}
-              onBlur={handleCaptureBlur}
-              placeholder="Ej. entrega inmediata, pago mixto, direccion de envio..."
-              rows={3}
-            />
-          </label>
-
-          <div className="pos-summary-row">
-            <span>Subtotal</span>
-            <span>{currency(subtotal)}</span>
-          </div>
-          {discount > 0 && (
-            <div className="pos-summary-row">
-              <span>Descuento</span>
-              <span>{currency(discount)}</span>
+          {checkoutExtrasOpen && (
+            <div className="pos-checkout-extras">
+              {!wholesaleDiscountPercent && (
+                <label className="pos-field">
+                  Descuento
+                  <input
+                    className="pos-input"
+                    data-manual-input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={discountInput}
+                    onChange={(event) => setDiscountInput(event.target.value)}
+                    onBlur={handleCaptureBlur}
+                    placeholder="0.00"
+                  />
+                </label>
+              )}
+              <label className="pos-field pos-note-field">
+                Nota
+                <textarea
+                  className="pos-input pos-textarea pos-note-input"
+                  data-manual-input
+                  value={saleNote}
+                  onChange={(event) => setSaleNote(event.target.value)}
+                  onBlur={handleCaptureBlur}
+                  placeholder="Nota opcional..."
+                  rows={2}
+                />
+              </label>
             </div>
           )}
-          <div className="pos-summary-row pos-total-row">
-            <strong>Total a cobrar</strong>
-            <strong>{currency(total)}</strong>
+
+          <div className="pos-footer-totals">
+            <div className="pos-summary-row">
+              <span>Subtotal</span>
+              <span>{currency(subtotal)}</span>
+            </div>
+            {discount > 0 && (
+              <div className="pos-summary-row">
+                <span>Descuento</span>
+                <span>-{currency(discount)}</span>
+              </div>
+            )}
+            <div className="pos-summary-row pos-total-row">
+              <strong>Total a cobrar</strong>
+              <strong>{currency(total)}</strong>
+            </div>
           </div>
 
-          <button onClick={() => completeSale()} disabled={!cashierOpen || cart.length === 0}>
+          <button
+            type="button"
+            className="pos-checkout-btn"
+            onClick={() => completeSale()}
+            disabled={!cashierOpen || cart.length === 0}
+          >
             Cobrar ahora
           </button>
 
-          <div className="actions pos-secondary-actions">
-            <button className="ghost" onClick={clearSale}>Limpiar</button>
-            <button className="ghost" onClick={() => printReceipt()} disabled={!lastReceipt}>
-              Imprimir factura
+          <div className="actions pos-footer-actions">
+            <button type="button" className="ghost" onClick={clearSale}>Limpiar</button>
+            <button type="button" className="ghost" onClick={() => printReceipt()} disabled={!lastReceipt}>
+              Imprimir
             </button>
-            <button className="ghost" onClick={() => setNotice(saleNote || "No hay notas cargadas para esta venta.")}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setNotice(saleNote || "No hay notas cargadas para esta venta.")}
+            >
               Ver nota
             </button>
           </div>

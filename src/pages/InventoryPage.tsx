@@ -1,5 +1,4 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { QuickScanProductModal, type QuickScanDraft } from "../components/QuickScanProductModal";
 import { useAppContext } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
 import { useBarcodeCapture } from "../hooks/useBarcodeCapture";
@@ -7,7 +6,6 @@ import { findProductByCode, normalizeScanCode } from "../hooks/useBarcodeScanner
 import type { Product } from "../types/domain";
 import { currency } from "../utils/format";
 import { createStockMovement } from "../utils/stockMovements";
-import { buildQuickProductFromScan } from "../utils/quickProduct";
 
 const baseCategories = ["Cosméticos", "Cuidado de Piel", "Herramientas", "Fragancias", "Accesorios"];
 const stockViews = ["Todos", "Disponibles", "Stock bajo", "Agotados"] as const;
@@ -44,6 +42,101 @@ const emptyProductForm: ProductFormState = {
   stockMinimo: "0",
 };
 
+function readProductFormFromElement(form: HTMLFormElement): ProductFormState {
+  const data = new FormData(form);
+  const value = (key: keyof ProductFormState) => String(data.get(key) ?? "").trim();
+
+  return {
+    id: value("id"),
+    nombre: value("nombre"),
+    marca: value("marca"),
+    descripcion: value("descripcion"),
+    categoria: value("categoria") || baseCategories[0],
+    costo: value("costo") || "0",
+    precio: value("precio") || "0",
+    precioMayorista: value("precioMayorista") || "0",
+    stock: value("stock") || "0",
+    stockMinimo: value("stockMinimo") || "0",
+  };
+}
+
+function buildProductFromFormState(
+  formState: ProductFormState,
+  products: Product[],
+  editingProductId: string | null,
+): ProductDraftResult {
+  const id = formState.id.trim().toUpperCase();
+  const nombre = formState.nombre.trim();
+  const marca = formState.marca.trim();
+  const descripcion = formState.descripcion.trim();
+  const categoria = formState.categoria.trim();
+  const costo = Number(formState.costo);
+  const precio = Number(formState.precio);
+  const precioMayorista = Number(formState.precioMayorista);
+  const stock = Number(formState.stock);
+  const stockMinimo = Number(formState.stockMinimo);
+
+  if (!id || !nombre || !marca || !categoria) {
+    return { error: "Completa codigo, nombre, marca y categoria." };
+  }
+
+  if (!Number.isFinite(costo) || costo < 0) {
+    return { error: "El costo debe ser un numero valido mayor o igual a 0." };
+  }
+
+  if (!Number.isFinite(precio) || precio < 0) {
+    return { error: "El precio de venta debe ser un numero valido mayor o igual a 0." };
+  }
+
+  if (!Number.isFinite(precioMayorista) || precioMayorista < 0) {
+    return { error: "El precio mayorista debe ser un numero valido mayor o igual a 0." };
+  }
+
+  if (!Number.isInteger(stock) || stock < 0) {
+    return { error: "El stock debe ser un numero entero mayor o igual a 0." };
+  }
+
+  if (!Number.isInteger(stockMinimo) || stockMinimo < 0) {
+    return { error: "El stock minimo debe ser un numero entero mayor o igual a 0." };
+  }
+
+  if (precio < costo) {
+    return { error: "El precio de venta no puede ser menor al costo." };
+  }
+
+  if (precioMayorista < costo) {
+    return { error: "El precio mayorista no puede ser menor al costo." };
+  }
+
+  if (precioMayorista > precio) {
+    return { error: "El precio de venta debe ser mayor o igual al precio mayorista." };
+  }
+
+  const duplicate = products.some((product) => {
+    if (editingProductId && product.id === editingProductId) return false;
+    return product.id.toLowerCase() === id.toLowerCase();
+  });
+
+  if (duplicate) {
+    return { error: "Ya existe un producto con ese codigo." };
+  }
+
+  return {
+    product: {
+      id,
+      nombre,
+      marca,
+      descripcion,
+      categoria,
+      costo,
+      precio,
+      precioMayorista,
+      stock,
+      stockMinimo,
+    } satisfies Product,
+  };
+}
+
 function getProductStatus(product: Product) {
   if (product.stock <= 0) {
     return { label: "Agotado", className: "danger" };
@@ -67,8 +160,7 @@ export function InventoryPage() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [formError, setFormError] = useState("");
-  const [unknownScanDraft, setUnknownScanDraft] = useState<QuickScanDraft | null>(null);
-  const [unknownScanError, setUnknownScanError] = useState("");
+  const [isScanCreate, setIsScanCreate] = useState(false);
   const [quickScanMode, setQuickScanMode] = useState(false);
 
   const categories = ["Todos", ...new Set([...baseCategories, ...products.map((product) => product.categoria)])];
@@ -105,6 +197,21 @@ export function InventoryPage() {
     setEditingProductId(null);
     setSelectedProduct(null);
     setFormError("");
+    setIsScanCreate(false);
+    setModalMode("create");
+  }
+
+  function openCreateModalFromScan(code: string) {
+    setDraft({
+      ...emptyProductForm,
+      id: code.toUpperCase(),
+      stock: "1",
+      stockMinimo: "1",
+    });
+    setEditingProductId(null);
+    setSelectedProduct(null);
+    setFormError("");
+    setIsScanCreate(true);
     setModalMode("create");
   }
 
@@ -139,6 +246,7 @@ export function InventoryPage() {
     setEditingProductId(null);
     setSelectedProduct(null);
     setFormError("");
+    setIsScanCreate(false);
   }
 
   function updateDraft(field: keyof ProductFormState, value: string) {
@@ -146,89 +254,22 @@ export function InventoryPage() {
     setDraft((prev) => ({ ...prev, [field]: value }));
   }
 
-  function buildProductFromDraft(): ProductDraftResult {
-    const id = draft.id.trim().toUpperCase();
-    const nombre = draft.nombre.trim();
-    const marca = draft.marca.trim();
-    const descripcion = draft.descripcion.trim();
-    const categoria = draft.categoria.trim();
-    const costo = Number(draft.costo);
-    const precio = Number(draft.precio);
-    const precioMayorista = Number(draft.precioMayorista);
-    const stock = Number(draft.stock);
-    const stockMinimo = Number(draft.stockMinimo);
-
-    if (!id || !nombre || !marca || !categoria) {
-      return { error: "Completa codigo, nombre, marca y categoria." };
-    }
-
-    if (!Number.isFinite(costo) || costo < 0) {
-      return { error: "El costo debe ser un numero valido mayor o igual a 0." };
-    }
-
-    if (!Number.isFinite(precio) || precio < 0) {
-      return { error: "El precio de venta debe ser un numero valido mayor o igual a 0." };
-    }
-
-    if (!Number.isFinite(precioMayorista) || precioMayorista < 0) {
-      return { error: "El precio mayorista debe ser un numero valido mayor o igual a 0." };
-    }
-
-    if (!Number.isInteger(stock) || stock < 0) {
-      return { error: "El stock debe ser un numero entero mayor o igual a 0." };
-    }
-
-    if (!Number.isInteger(stockMinimo) || stockMinimo < 0) {
-      return { error: "El stock minimo debe ser un numero entero mayor o igual a 0." };
-    }
-
-    if (precio < costo) {
-      return { error: "El precio de venta no puede ser menor al costo." };
-    }
-
-    if (precioMayorista < costo) {
-      return { error: "El precio mayorista no puede ser menor al costo." };
-    }
-
-    if (precioMayorista > precio) {
-      return { error: "El precio de venta debe ser mayor o igual al precio mayorista." };
-    }
-
-    const duplicate = products.some((product) => {
-      if (editingProductId && product.id === editingProductId) return false;
-      return product.id.toLowerCase() === id.toLowerCase();
-    });
-
-    if (duplicate) {
-      return { error: "Ya existe un producto con ese codigo." };
-    }
-
-    return {
-      product: {
-        id,
-        nombre,
-        marca,
-        descripcion,
-        categoria,
-        costo,
-        precio,
-        precioMayorista,
-        stock,
-        stockMinimo,
-      } satisfies Product,
-    };
-  }
-
-  function submitProduct(event: FormEvent<HTMLFormElement>) {
+  function submitProduct(event: FormEvent<HTMLFormElement>): boolean {
     event.preventDefault();
 
-    const result = buildProductFromDraft();
+    const formState = readProductFormFromElement(event.currentTarget);
+    const result = buildProductFromFormState(formState, products, editingProductId);
     if ("error" in result) {
       setFormError(result.error);
-      return;
+      setDraft(formState);
+      return false;
     }
 
+    setDraft(formState);
+    const savedFromScan = isScanCreate && modalMode === "create";
+
     if (modalMode === "create") {
+      const fromScan = isScanCreate;
       setProducts((prev) => [result.product, ...prev]);
       if (result.product.stock > 0) {
         appendStockMovements([createStockMovement({
@@ -236,11 +277,16 @@ export function InventoryPage() {
           productId: result.product.id,
           nombre: result.product.nombre,
           cantidad: result.product.stock,
-          motivo: "Alta de producto",
+          motivo: fromScan ? "Registro por escaneo" : "Alta de producto",
           fecha: new Date().toISOString(),
         })]);
       }
-      setNotice(`Producto ${result.product.nombre} agregado correctamente.`);
+      setQuery(result.product.id);
+      setNotice(
+        fromScan
+          ? `Producto registrado en inventario: ${result.product.nombre}`
+          : `Producto ${result.product.nombre} agregado correctamente.`,
+      );
     }
 
     if (modalMode === "edit" && editingProductId) {
@@ -273,6 +319,7 @@ export function InventoryPage() {
 
     closeModal();
     void forceSave();
+    return savedFromScan;
   }
 
   function deleteProduct() {
@@ -359,13 +406,7 @@ export function InventoryPage() {
       return;
     }
 
-    setUnknownScanError("");
-    setUnknownScanDraft({
-      id: code.toUpperCase(),
-      nombre: "",
-      precio: "0",
-      stock: "1",
-    });
+    openCreateModalFromScan(code);
   }, [isAdmin, quickScanMode, products, setNotice]);
 
   const {
@@ -376,43 +417,16 @@ export function InventoryPage() {
     handleSearchKeyDown,
   } = useBarcodeCapture({
     onScan: registerScannedCode,
-    isPaused: () => modalMode !== null || unknownScanDraft !== null,
+    isPaused: () => modalMode !== null,
   });
 
-  const closeUnknownScanModal = useCallback(() => {
-    setUnknownScanDraft(null);
-    setUnknownScanError("");
-    window.setTimeout(() => focusScannerCapture(), 80);
-  }, [focusScannerCapture]);
-
-  function submitUnknownScanProduct(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!unknownScanDraft) return;
-
-    const result = buildQuickProductFromScan(unknownScanDraft, products);
-    if ("error" in result) {
-      setUnknownScanError(result.error);
-      return;
+  const closeModalWithScannerRefocus = useCallback(() => {
+    const shouldRefocus = isScanCreate;
+    closeModal();
+    if (shouldRefocus) {
+      window.setTimeout(() => focusScannerCapture(), 80);
     }
-
-    const product = result.product;
-    setProducts((prev) => [product, ...prev]);
-    if (product.stock > 0) {
-      appendStockMovements([createStockMovement({
-        tipo: "entrada",
-        productId: product.id,
-        nombre: product.nombre,
-        cantidad: product.stock,
-        motivo: "Registro por escaneo",
-        fecha: new Date().toISOString(),
-      })]);
-    }
-    setUnknownScanDraft(null);
-    setUnknownScanError("");
-    setQuery(product.id);
-    setNotice(`Producto registrado en inventario: ${product.nombre}`);
-    window.setTimeout(() => focusScannerCapture(), 80);
-  }
+  }, [isScanCreate, focusScannerCapture]);
 
   const focusScannerWithNotice = useCallback(() => {
     focusScannerCapture();
@@ -426,7 +440,7 @@ export function InventoryPage() {
           <h1>Inventario</h1>
           <p className="muted">
             {quickScanMode && isAdmin
-              ? "Modo escaneo rapido: cada codigo conocido suma +1 al stock. Los nuevos abren el registro rapido."
+              ? "Modo escaneo rapido: cada codigo conocido suma +1 al stock. Los nuevos abren el formulario completo."
               : "Escanea codigos con el lector USB o gestiona productos manualmente."}
           </p>
         </div>
@@ -609,7 +623,11 @@ export function InventoryPage() {
       </div>
 
       {isAdmin && modalMode && (
-        <div className="modal-backdrop" role="presentation" onClick={closeModal}>
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={isScanCreate && modalMode === "create" ? closeModalWithScannerRefocus : closeModal}
+        >
           <div
             className="modal-panel card inventory-modal-panel"
             role="dialog"
@@ -621,22 +639,55 @@ export function InventoryPage() {
               <>
                 <div className="row">
                   <div>
-                    <h2 id="inventory-modal-title">{modalMode === "create" ? "Agregar producto" : "Editar producto"}</h2>
-                    <p className="muted">
+                    <h2 id="inventory-modal-title">
                       {modalMode === "create"
-                        ? "Registra codigo, precios y stock inicial como en un panel de inventario real."
-                        : "Actualiza costos, precios, stock y datos generales del producto."}
+                        ? (isScanCreate ? "Agregar producto escaneado" : "Agregar producto")
+                        : "Editar producto"}
+                    </h2>
+                    <p className="muted">
+                      {modalMode === "create" && isScanCreate
+                        ? (
+                          <>
+                            El codigo <strong>{draft.id}</strong> no esta en inventario.
+                            Completa marca, costos, precios y stock como al agregar manualmente.
+                          </>
+                        )
+                        : modalMode === "create"
+                          ? "Registra codigo, precios y stock inicial como en un panel de inventario real."
+                          : "Actualiza costos, precios, stock y datos generales del producto."}
                     </p>
                   </div>
-                  <button className="ghost" type="button" onClick={closeModal}>Cerrar</button>
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={isScanCreate && modalMode === "create" ? closeModalWithScannerRefocus : closeModal}
+                  >
+                    Cerrar
+                  </button>
                 </div>
 
-                <form className="inventory-form" onSubmit={submitProduct}>
+                <form
+                  className="inventory-form"
+                  autoComplete="off"
+                  onSubmit={(event) => {
+                    const refocusAfterSave = isScanCreate && modalMode === "create";
+                    if (submitProduct(event) && refocusAfterSave) {
+                      window.setTimeout(() => focusScannerCapture(), 80);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && event.target !== event.currentTarget) {
+                      event.stopPropagation();
+                    }
+                  }}
+                >
                   <div className="inventory-form-grid">
                     <label>
                       Codigo
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="id"
                         value={draft.id}
                         onChange={(event) => updateDraft("id", event.target.value)}
                         placeholder="Ej. LEX-CM-100"
@@ -647,6 +698,8 @@ export function InventoryPage() {
                       Categoria
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="categoria"
                         list="inventory-categories"
                         value={draft.categoria}
                         onChange={(event) => updateDraft("categoria", event.target.value)}
@@ -663,6 +716,8 @@ export function InventoryPage() {
                       Nombre
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="nombre"
                         value={draft.nombre}
                         onChange={(event) => updateDraft("nombre", event.target.value)}
                         placeholder="Nombre visible del producto"
@@ -673,6 +728,8 @@ export function InventoryPage() {
                       Marca
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="marca"
                         value={draft.marca}
                         onChange={(event) => updateDraft("marca", event.target.value)}
                         placeholder="Marca del producto"
@@ -683,6 +740,8 @@ export function InventoryPage() {
                       Descripcion
                       <textarea
                         className="inventory-input inventory-textarea"
+                        data-manual-input
+                        name="descripcion"
                         value={draft.descripcion}
                         onChange={(event) => updateDraft("descripcion", event.target.value)}
                         placeholder="Describe el producto para identificarlo rapido."
@@ -694,6 +753,8 @@ export function InventoryPage() {
                       Costo
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="costo"
                         type="number"
                         min="0"
                         step="0.01"
@@ -706,6 +767,8 @@ export function InventoryPage() {
                       Precio de venta
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="precio"
                         type="number"
                         min="0"
                         step="0.01"
@@ -718,6 +781,8 @@ export function InventoryPage() {
                       Precio mayorista
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="precioMayorista"
                         type="number"
                         min="0"
                         step="0.01"
@@ -730,6 +795,8 @@ export function InventoryPage() {
                       Stock inicial
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="stock"
                         type="number"
                         min="0"
                         step="1"
@@ -742,6 +809,8 @@ export function InventoryPage() {
                       Stock minimo
                       <input
                         className="inventory-input"
+                        data-manual-input
+                        name="stockMinimo"
                         type="number"
                         min="0"
                         step="1"
@@ -754,8 +823,18 @@ export function InventoryPage() {
                   {formError && <p className="form-error">{formError}</p>}
 
                   <div className="modal-actions">
-                    <button className="ghost" type="button" onClick={closeModal}>Cancelar</button>
-                    <button type="submit">{modalMode === "create" ? "Guardar producto" : "Guardar cambios"}</button>
+                    <button
+                      className="ghost"
+                      type="button"
+                      onClick={isScanCreate && modalMode === "create" ? closeModalWithScannerRefocus : closeModal}
+                    >
+                      Cancelar
+                    </button>
+                    <button type="submit">
+                      {modalMode === "create"
+                        ? (isScanCreate ? "Guardar en inventario" : "Guardar producto")
+                        : "Guardar cambios"}
+                    </button>
                   </div>
                 </form>
               </>
@@ -779,17 +858,6 @@ export function InventoryPage() {
         </div>
       )}
 
-      {isAdmin && unknownScanDraft && (
-        <QuickScanProductModal
-          draft={unknownScanDraft}
-          error={unknownScanError}
-          submitLabel="Guardar en inventario"
-          onClose={closeUnknownScanModal}
-          onSubmit={submitUnknownScanProduct}
-          onDraftChange={(updater) => setUnknownScanDraft((prev) => (prev ? updater(prev) : prev))}
-          onClearError={() => setUnknownScanError("")}
-        />
-      )}
     </section>
   );
 }
