@@ -2,6 +2,9 @@ import type { NextFunction, Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadAppState, saveAppState, shouldMigrateLocalState, type AppStatePayload } from "./appState.js";
 import {
   createUser,
@@ -18,6 +21,10 @@ import { getDatabaseLabel, initDatabase, isDatabaseReady, pingDatabase, resetDat
 dotenv.config();
 
 const PORT = Number(process.env.PORT ?? 3001);
+const HOST = process.env.HOST ?? "127.0.0.1";
+const SERVE_STATIC = process.env.SERVE_STATIC === "1";
+const distPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist");
+const canServeStatic = SERVE_STATIC && fs.existsSync(path.join(distPath, "index.html"));
 
 const app = express();
 app.use(cors());
@@ -209,6 +216,30 @@ app.post("/api/app-state/migrate", requireAuth, requireDatabase, async (req, res
   }
 });
 
+function attachStaticFrontend() {
+  if (!canServeStatic) return;
+
+  console.log(`Sirviendo app desde ${distPath}`);
+
+  app.use(express.static(distPath));
+
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      next();
+      return;
+    }
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      next();
+      return;
+    }
+    res.sendFile(path.join(distPath, "index.html"), (error) => {
+      if (error) next(error);
+    });
+  });
+}
+
+attachStaticFrontend();
+
 const DB_RETRY_MS = 10_000;
 let connecting = false;
 
@@ -238,8 +269,14 @@ function startServer() {
     setTimeout(connectDatabase, 2000);
   });
 
-  app.listen(PORT, () => {
-    console.log(`Lexy API escuchando en http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    if (canServeStatic) {
+      const label = HOST === "0.0.0.0" ? "localhost" : HOST;
+      console.log(`Lexy Essence disponible en http://${label}:${PORT}`);
+    } else {
+      console.log(`Lexy API escuchando en http://${HOST}:${PORT}`);
+      console.log("Modo desarrollo: usa npm run dev para frontend + API.");
+    }
     void connectDatabase();
   });
 }
