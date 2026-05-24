@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { SaveErrorOverlay } from "./SaveErrorOverlay";
+import { SaveStatusBanner } from "./SaveStatusBanner";
 import { AppDataGate } from "./AppDataGate";
 import { useAppContext } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
@@ -8,6 +10,7 @@ const adminNavItems = [
   { to: "/", label: "Inicio", icon: "dashboard" },
   { to: "/punto-venta", label: "Punto de Venta", icon: "point_of_sale" },
   { to: "/inventario", label: "Inventario", icon: "inventory_2" },
+  { to: "/clientes-mayoristas", label: "Mayoristas", icon: "groups" },
   { to: "/reportes", label: "Reportes", icon: "analytics" },
   { to: "/agenda", label: "Agenda", icon: "event" },
   { to: "/configuracion", label: "Configuracion", icon: "settings" },
@@ -23,7 +26,7 @@ export function Layout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { setNotice, isAppSaving } = useAppContext();
+  const { setNotice, isAppSaving, appSaveError, isOfflineMode } = useAppContext();
   const { user, isAdmin, logout } = useAuth();
 
   const navItems = isAdmin ? adminNavItems : cajaNavItems;
@@ -69,6 +72,15 @@ export function Layout() {
           <span className="topbar-user muted">
             {user?.displayName}
             {isAppSaving && <span className="db-saving-badge"> · Guardando...</span>}
+            {isOfflineMode && navigator.onLine === false && (
+              <span className="db-offline-badge"> · Sin internet</span>
+            )}
+            {isOfflineMode && navigator.onLine && (
+              <span className="db-offline-badge"> · Sin conexion a Supabase</span>
+            )}
+            {appSaveError && !isOfflineMode && (
+              <span className="db-error-badge"> · Sin guardar en nube</span>
+            )}
           </span>
           {isAdmin && (
             <>
@@ -112,7 +124,9 @@ export function Layout() {
         </button>
       </aside>
       {mobileMenuOpen ? <button className="mobile-backdrop" onClick={() => setMobileMenuOpen(false)} aria-label="Cerrar menu" /> : null}
-      <main className="content">
+      <main className={`content ${appSaveError && !isOfflineMode ? "content-save-blocked" : ""}`}>
+        <SaveStatusBanner />
+        <SaveErrorOverlay />
         <AppDataGate>
           <Outlet />
         </AppDataGate>

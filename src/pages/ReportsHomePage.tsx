@@ -2,6 +2,19 @@ import { Link } from "react-router-dom";
 
 const reportOptions = [
   {
+    to: "/clientes-mayoristas",
+    title: "Clientes mayoristas",
+    description: "Administrar salones, cedulas e historial de compras por cliente.",
+    icon: "groups",
+  },
+  {
+    to: "/reportes/dia",
+    title: "Reporte del dia",
+    description: "Todo lo realizado: ventas, mayoristas, descuentos, caja, citas e inventario.",
+    icon: "today",
+    featured: true,
+  },
+  {
     to: "/reportes/caja",
     title: "Reportes de Caja",
     description: "Ventas del dia, efectivo, transferencias y cierres de caja.",
@@ -25,7 +38,11 @@ export function ReportsHomePage() {
 
       <div className="reports-home-grid">
         {reportOptions.map((option) => (
-          <Link className="reports-home-card" key={option.to} to={option.to}>
+          <Link
+            className={`reports-home-card ${option.featured ? "reports-home-card-featured" : ""}`}
+            key={option.to}
+            to={option.to}
+          >
             <span className="material-symbols-outlined reports-home-icon">{option.icon}</span>
             <div>
               <h2>{option.title}</h2>

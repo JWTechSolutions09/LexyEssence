@@ -17,7 +17,11 @@ export type TransactionItem = {
   productId: string;
   nombre: string;
   cantidad: number;
+  precioUnitario?: number;
+  precioLista?: number;
 };
+
+export type TransactionPricingMode = "detalle" | "mayorista";
 
 export type Transaction = {
   id: string;
@@ -27,6 +31,16 @@ export type Transaction = {
   estado: string;
   soldAt?: string;
   items?: TransactionItem[];
+  pricingMode?: TransactionPricingMode;
+  subtotal?: number;
+  listSubtotal?: number;
+  discountAmount?: number;
+  wholesaleDiscountPercent?: WholesaleDiscountPercent;
+  wholesaleDiscountAmount?: number;
+  wholesaleClientId?: string;
+  wholesaleSalon?: string;
+  wholesaleCedula?: string;
+  note?: string;
 };
 
 export type Appointment = {
@@ -44,6 +58,14 @@ export type Supplier = {
   contacto: string;
   estado: "Activo" | "Pendiente";
 };
+
+export type WholesaleClient = {
+  id: string;
+  cedula: string;
+  salon: string;
+};
+
+export type WholesaleDiscountPercent = 5 | 10;
 
 export type StockMovementType = "entrada" | "salida";
 

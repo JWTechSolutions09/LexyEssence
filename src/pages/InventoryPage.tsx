@@ -57,7 +57,7 @@ function getProductStatus(product: Product) {
 }
 
 export function InventoryPage() {
-  const { products, setProducts, setNotice, appendStockMovements } = useAppContext();
+  const { products, setProducts, setNotice, appendStockMovements, forceSave } = useAppContext();
   const { isAdmin } = useAuth();
   const [filter, setFilter] = useState("Todos");
   const [stockView, setStockView] = useState<StockView>("Todos");
@@ -271,6 +271,7 @@ export function InventoryPage() {
     }
 
     closeModal();
+    void forceSave();
   }
 
   function deleteProduct() {
@@ -290,6 +291,7 @@ export function InventoryPage() {
     setProducts((prev) => prev.filter((product) => product.id !== selectedProduct.id));
     setNotice(`Producto ${selectedProduct.nombre} eliminado del inventario.`);
     closeModal();
+    void forceSave();
   }
 
   function increaseStock(id: string) {
@@ -311,6 +313,7 @@ export function InventoryPage() {
       fecha: new Date().toISOString(),
     })]);
     setNotice("Stock actualizado correctamente.");
+    void forceSave();
   }
 
   const registerScannedCode = useCallback((rawCode: string) => {

@@ -4,8 +4,24 @@ import type {
   Product,
   StockMovement,
   Transaction,
+  WholesaleClient,
 } from "../src/types/domain.js";
-import { db } from "./db.js";
+import { getPool } from "./db.js";
+
+function extractSaleDetails(transaction: Transaction) {
+  return {
+    pricingMode: transaction.pricingMode,
+    subtotal: transaction.subtotal,
+    listSubtotal: transaction.listSubtotal,
+    discountAmount: transaction.discountAmount,
+    wholesaleDiscountPercent: transaction.wholesaleDiscountPercent,
+    wholesaleDiscountAmount: transaction.wholesaleDiscountAmount,
+    wholesaleClientId: transaction.wholesaleClientId,
+    wholesaleSalon: transaction.wholesaleSalon,
+    wholesaleCedula: transaction.wholesaleCedula,
+    note: transaction.note,
+  };
+}
 
 export type AppStatePayload = {
   products: Product[];
@@ -14,7 +30,32 @@ export type AppStatePayload = {
   stockMovements: StockMovement[];
   currentCashSession: CashSession | null;
   cashSessionHistory: CashSession[];
+  wholesaleClients: WholesaleClient[];
 };
+
+function parseJsonValue<T>(value: unknown): T | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") return JSON.parse(value) as T;
+  return value as T;
+}
+
+function toIsoTimestamp(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (value == null) return new Date().toISOString();
+
+  const str = String(value).trim();
+  if (!str) return new Date().toISOString();
+
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+
+  return str;
+}
+
+function toIsoTimestampOrNull(value: unknown): string | null {
+  if (value == null) return null;
+  return toIsoTimestamp(value);
+}
 
 function rowToProduct(row: Record<string, unknown>): Product {
   return {
@@ -32,15 +73,17 @@ function rowToProduct(row: Record<string, unknown>): Product {
 }
 
 function rowToTransaction(row: Record<string, unknown>): Transaction {
-  const itemsJson = row.items_json;
+  const details = parseJsonValue<ReturnType<typeof extractSaleDetails>>(row.sale_details_json) ?? {};
+
   return {
     id: String(row.id),
     cliente: String(row.cliente),
     monto: Number(row.monto),
     metodo: String(row.metodo),
     estado: String(row.estado),
-    soldAt: row.sold_at ? String(row.sold_at) : undefined,
-    items: itemsJson ? JSON.parse(String(itemsJson)) : undefined,
+    soldAt: row.sold_at ? toIsoTimestamp(row.sold_at) : undefined,
+    items: parseJsonValue<Transaction["items"]>(row.items_json),
+    ...details,
   };
 }
 
@@ -50,7 +93,7 @@ function rowToAppointment(row: Record<string, unknown>): Appointment {
     date: String(row.date),
     hora: String(row.hora),
     cliente: String(row.cliente),
-    servicios: JSON.parse(String(row.servicios_json)),
+    servicios: parseJsonValue<string[]>(row.servicios_json) ?? [],
     total: Number(row.total),
   };
 }
@@ -63,7 +106,7 @@ function rowToStockMovement(row: Record<string, unknown>): StockMovement {
     nombre: String(row.nombre),
     cantidad: Number(row.cantidad),
     motivo: String(row.motivo),
-    fecha: String(row.fecha),
+    fecha: toIsoTimestamp(row.fecha),
     referencia: row.referencia ? String(row.referencia) : undefined,
   };
 }
@@ -71,156 +114,181 @@ function rowToStockMovement(row: Record<string, unknown>): StockMovement {
 function rowToCashSession(row: Record<string, unknown>): CashSession {
   return {
     id: String(row.id),
-    openedAt: String(row.opened_at),
-    closedAt: row.closed_at ? String(row.closed_at) : undefined,
+    openedAt: toIsoTimestamp(row.opened_at),
+    closedAt: row.closed_at ? toIsoTimestamp(row.closed_at) : undefined,
     openingAmount: Number(row.opening_amount),
-    closeSummary: row.close_summary_json
-      ? JSON.parse(String(row.close_summary_json))
-      : undefined,
+    closeSummary: parseJsonValue<CashSession["closeSummary"]>(row.close_summary_json),
   };
 }
 
-export function loadAppState(): AppStatePayload {
-  const products = (db.prepare("SELECT * FROM products ORDER BY nombre").all() as Record<string, unknown>[])
-    .map(rowToProduct);
+function rowToWholesaleClient(row: Record<string, unknown>): WholesaleClient {
+  return {
+    id: String(row.id),
+    cedula: String(row.cedula),
+    salon: String(row.salon),
+  };
+}
 
-  const transactions = (db.prepare("SELECT * FROM transactions ORDER BY sold_at DESC").all() as Record<string, unknown>[])
-    .map(rowToTransaction);
+function isCurrentSession(row: Record<string, unknown>) {
+  return row.is_current === true || row.is_current === 1;
+}
 
-  const appointments = (db.prepare("SELECT * FROM appointments ORDER BY date, hora").all() as Record<string, unknown>[])
-    .map(rowToAppointment);
+async function loadWholesaleClients() {
+  try {
+    const result = await getPool().query("SELECT * FROM wholesale_clients ORDER BY salon");
+    return result.rows.map((row) => rowToWholesaleClient(row as Record<string, unknown>));
+  } catch {
+    return [];
+  }
+}
 
-  const stockMovements = (db.prepare("SELECT * FROM stock_movements ORDER BY fecha DESC").all() as Record<string, unknown>[])
-    .map(rowToStockMovement);
+export async function loadAppState(): Promise<AppStatePayload> {
+  const wholesaleClients = await loadWholesaleClients();
+  const db = getPool();
+  const [productsResult, transactionsResult, appointmentsResult, movementsResult, cashResult] = await Promise.all([
+    db.query("SELECT * FROM products ORDER BY nombre"),
+    db.query("SELECT * FROM transactions ORDER BY sold_at DESC NULLS LAST"),
+    db.query("SELECT * FROM appointments ORDER BY date, hora"),
+    db.query("SELECT * FROM stock_movements ORDER BY fecha DESC"),
+    db.query("SELECT * FROM cash_sessions ORDER BY opened_at DESC"),
+  ]);
 
-  const cashRows = db.prepare("SELECT * FROM cash_sessions ORDER BY opened_at DESC").all() as Record<string, unknown>[];
-  const currentRow = cashRows.find((row) => Number(row.is_current) === 1);
-  const currentCashSession = currentRow ? rowToCashSession(currentRow) : null;
-  const cashSessionHistory = cashRows
-    .filter((row) => Number(row.is_current) !== 1)
-    .map(rowToCashSession);
+  const cashRows = cashResult.rows as Record<string, unknown>[];
+  const currentRow = cashRows.find(isCurrentSession);
 
   return {
-    products,
-    transactions,
-    appointments,
-    stockMovements,
-    currentCashSession,
-    cashSessionHistory,
+    products: productsResult.rows.map((row) => rowToProduct(row as Record<string, unknown>)),
+    transactions: transactionsResult.rows.map((row) => rowToTransaction(row as Record<string, unknown>)),
+    appointments: appointmentsResult.rows.map((row) => rowToAppointment(row as Record<string, unknown>)),
+    stockMovements: movementsResult.rows.map((row) => rowToStockMovement(row as Record<string, unknown>)),
+    currentCashSession: currentRow ? rowToCashSession(currentRow) : null,
+    cashSessionHistory: cashRows
+      .filter((row) => !isCurrentSession(row))
+      .map(rowToCashSession),
+    wholesaleClients,
   };
 }
 
-export function saveAppState(payload: AppStatePayload) {
-  const write = db.transaction(() => {
-    db.prepare("DELETE FROM products").run();
-    db.prepare("DELETE FROM transactions").run();
-    db.prepare("DELETE FROM appointments").run();
-    db.prepare("DELETE FROM stock_movements").run();
-    db.prepare("DELETE FROM cash_sessions").run();
+export async function saveAppState(payload: AppStatePayload) {
+  const client = await getPool().connect();
 
-    const insertProduct = db.prepare(`
-      INSERT INTO products (
-        id, nombre, marca, descripcion, categoria, costo, precio, precio_mayorista, stock, stock_minimo
-      ) VALUES (
-        @id, @nombre, @marca, @descripcion, @categoria, @costo, @precio, @precio_mayorista, @stock, @stock_minimo
-      )
-    `);
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM products");
+    await client.query("DELETE FROM transactions");
+    await client.query("DELETE FROM appointments");
+    await client.query("DELETE FROM stock_movements");
+    await client.query("DELETE FROM cash_sessions");
+    await client.query("DELETE FROM wholesale_clients");
 
     for (const product of payload.products) {
-      insertProduct.run({
-        id: product.id,
-        nombre: product.nombre,
-        marca: product.marca,
-        descripcion: product.descripcion,
-        categoria: product.categoria,
-        costo: product.costo,
-        precio: product.precio,
-        precio_mayorista: product.precioMayorista,
-        stock: product.stock,
-        stock_minimo: product.stockMinimo,
-      });
+      await client.query(`
+        INSERT INTO products (
+          id, nombre, marca, descripcion, categoria, costo, precio, precio_mayorista, stock, stock_minimo
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `, [
+        product.id,
+        product.nombre,
+        product.marca,
+        product.descripcion,
+        product.categoria,
+        product.costo,
+        product.precio,
+        product.precioMayorista,
+        product.stock,
+        product.stockMinimo,
+      ]);
     }
-
-    const insertTransaction = db.prepare(`
-      INSERT INTO transactions (id, cliente, monto, metodo, estado, sold_at, items_json)
-      VALUES (@id, @cliente, @monto, @metodo, @estado, @sold_at, @items_json)
-    `);
 
     for (const transaction of payload.transactions) {
-      insertTransaction.run({
-        id: transaction.id,
-        cliente: transaction.cliente,
-        monto: transaction.monto,
-        metodo: transaction.metodo,
-        estado: transaction.estado,
-        sold_at: transaction.soldAt ?? null,
-        items_json: transaction.items ? JSON.stringify(transaction.items) : null,
-      });
+      const saleDetails = extractSaleDetails(transaction);
+      await client.query(`
+        INSERT INTO transactions (id, cliente, monto, metodo, estado, sold_at, items_json, sale_details_json)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        transaction.id,
+        transaction.cliente,
+        transaction.monto,
+        transaction.metodo,
+        transaction.estado,
+        transaction.soldAt ? toIsoTimestamp(transaction.soldAt) : null,
+        transaction.items ? JSON.stringify(transaction.items) : null,
+        JSON.stringify(saleDetails),
+      ]);
     }
-
-    const insertAppointment = db.prepare(`
-      INSERT INTO appointments (id, date, hora, cliente, servicios_json, total)
-      VALUES (@id, @date, @hora, @cliente, @servicios_json, @total)
-    `);
 
     for (const appointment of payload.appointments) {
-      insertAppointment.run({
-        id: appointment.id,
-        date: appointment.date,
-        hora: appointment.hora,
-        cliente: appointment.cliente,
-        servicios_json: JSON.stringify(appointment.servicios),
-        total: appointment.total,
-      });
+      await client.query(`
+        INSERT INTO appointments (id, date, hora, cliente, servicios_json, total)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        appointment.id,
+        appointment.date,
+        appointment.hora,
+        appointment.cliente,
+        JSON.stringify(appointment.servicios),
+        appointment.total,
+      ]);
     }
-
-    const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (id, tipo, product_id, nombre, cantidad, motivo, fecha, referencia)
-      VALUES (@id, @tipo, @product_id, @nombre, @cantidad, @motivo, @fecha, @referencia)
-    `);
 
     for (const movement of payload.stockMovements) {
-      insertMovement.run({
-        id: movement.id,
-        tipo: movement.tipo,
-        product_id: movement.productId,
-        nombre: movement.nombre,
-        cantidad: movement.cantidad,
-        motivo: movement.motivo,
-        fecha: movement.fecha,
-        referencia: movement.referencia ?? null,
-      });
+      await client.query(`
+        INSERT INTO stock_movements (id, tipo, product_id, nombre, cantidad, motivo, fecha, referencia)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        movement.id,
+        movement.tipo,
+        movement.productId,
+        movement.nombre,
+        movement.cantidad,
+        movement.motivo,
+        toIsoTimestamp(movement.fecha),
+        movement.referencia ?? null,
+      ]);
     }
 
-    const insertCashSession = db.prepare(`
-      INSERT INTO cash_sessions (id, opened_at, closed_at, opening_amount, close_summary_json, is_current)
-      VALUES (@id, @opened_at, @closed_at, @opening_amount, @close_summary_json, @is_current)
-    `);
-
     if (payload.currentCashSession) {
-      insertCashSession.run({
-        id: payload.currentCashSession.id,
-        opened_at: payload.currentCashSession.openedAt,
-        closed_at: null,
-        opening_amount: payload.currentCashSession.openingAmount,
-        close_summary_json: null,
-        is_current: 1,
-      });
+      await client.query(`
+        INSERT INTO cash_sessions (id, opened_at, closed_at, opening_amount, close_summary_json, is_current)
+        VALUES ($1, $2, NULL, $3, NULL, TRUE)
+      `, [
+        payload.currentCashSession.id,
+        toIsoTimestamp(payload.currentCashSession.openedAt),
+        payload.currentCashSession.openingAmount,
+      ]);
     }
 
     for (const session of payload.cashSessionHistory) {
-      insertCashSession.run({
-        id: session.id,
-        opened_at: session.openedAt,
-        closed_at: session.closedAt ?? null,
-        opening_amount: session.openingAmount,
-        close_summary_json: session.closeSummary ? JSON.stringify(session.closeSummary) : null,
-        is_current: 0,
-      });
+      await client.query(`
+        INSERT INTO cash_sessions (id, opened_at, closed_at, opening_amount, close_summary_json, is_current)
+        VALUES ($1, $2, $3, $4, $5, FALSE)
+      `, [
+        session.id,
+        toIsoTimestamp(session.openedAt),
+        toIsoTimestampOrNull(session.closedAt),
+        session.openingAmount,
+        session.closeSummary ? JSON.stringify(session.closeSummary) : null,
+      ]);
     }
-  });
 
-  write();
+    for (const wholesaleClient of payload.wholesaleClients ?? []) {
+      await client.query(`
+        INSERT INTO wholesale_clients (id, cedula, salon)
+        VALUES ($1, $2, $3)
+      `, [
+        wholesaleClient.id,
+        wholesaleClient.cedula,
+        wholesaleClient.salon,
+      ]);
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export function hasUserAppData(state: AppStatePayload) {
@@ -229,4 +297,10 @@ export function hasUserAppData(state: AppStatePayload) {
     || state.stockMovements.length > 0
     || Boolean(state.currentCashSession)
     || state.cashSessionHistory.length > 0;
+}
+
+export function shouldMigrateLocalState(current: AppStatePayload, incoming: AppStatePayload) {
+  if (hasUserAppData(current)) return false;
+  if (hasUserAppData(incoming)) return true;
+  return incoming.products.length > current.products.length;
 }

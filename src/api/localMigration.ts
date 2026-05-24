@@ -43,6 +43,7 @@ export function readLocalAppState(): AppStatePayload | null {
     stockMovements,
     currentCashSession,
     cashSessionHistory,
+    wholesaleClients: [],
   };
 }
 

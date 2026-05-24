@@ -1,8 +1,9 @@
+import type { NextFunction, Request, Response } from "express";
 import cors from "cors";
+import dotenv from "dotenv";
 import express from "express";
-import { hasUserAppData, loadAppState, saveAppState, type AppStatePayload } from "./appState.js";
+import { loadAppState, saveAppState, shouldMigrateLocalState, type AppStatePayload } from "./appState.js";
 import {
-  countActiveAdmins,
   createUser,
   listUsers,
   loginUser,
@@ -12,21 +13,42 @@ import {
   updateUserPassword,
   type AuthenticatedRequest,
 } from "./auth.js";
-import { db, initDatabase } from "./db.js";
+import { getDatabaseLabel, initDatabase, isDatabaseReady, pingDatabase, resetDatabase, setDatabaseReconnectHandler } from "./db.js";
+
+dotenv.config();
 
 const PORT = Number(process.env.PORT ?? 3001);
-
-initDatabase();
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, database: db.name });
+function requireDatabase(_req: Request, res: Response, next: NextFunction) {
+  if (!isDatabaseReady()) {
+    res.status(503).json({ error: "Conectando con Supabase. Intenta en unos segundos." });
+    return;
+  }
+  next();
+}
+
+app.get("/api/health", async (_req, res) => {
+  if (!isDatabaseReady()) {
+    res.status(503).json({ ok: false, error: "Conectando con Supabase..." });
+    return;
+  }
+
+  try {
+    const now = await pingDatabase();
+    res.json({ ok: true, database: getDatabaseLabel(), time: now });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Error de base de datos.",
+    });
+  }
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", requireDatabase, async (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
 
@@ -35,24 +57,32 @@ app.post("/api/auth/login", (req, res) => {
     return;
   }
 
-  const result = loginUser(username, password);
-  if (!result) {
-    res.status(401).json({ error: "Credenciales invalidas." });
-    return;
+  try {
+    const result = await loginUser(username, password);
+    if (!result) {
+      res.status(401).json({ error: "Credenciales invalidas." });
+      return;
+    }
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al iniciar sesion." });
   }
-
-  res.json(result);
 });
 
-app.get("/api/auth/me", requireAuth, (req: AuthenticatedRequest, res) => {
+app.get("/api/auth/me", requireAuth, requireDatabase, (req: AuthenticatedRequest, res) => {
   res.json({ user: req.auth });
 });
 
-app.get("/api/users", requireAuth, requireAdmin, (_req, res) => {
-  res.json({ users: listUsers() });
+app.get("/api/users", requireAuth, requireAdmin, requireDatabase, async (_req, res) => {
+  try {
+    const users = await listUsers();
+    res.json({ users });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al listar usuarios." });
+  }
 });
 
-app.post("/api/users", requireAuth, requireAdmin, (req, res) => {
+app.post("/api/users", requireAuth, requireAdmin, requireDatabase, async (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   const displayName = typeof req.body?.displayName === "string" ? req.body.displayName : "";
@@ -63,26 +93,34 @@ app.post("/api/users", requireAuth, requireAdmin, (req, res) => {
     return;
   }
 
-  const result = createUser({ username, password, displayName, role });
-  if (!result.ok) {
-    res.status(400).json({ error: result.error });
-    return;
+  try {
+    const result = await createUser({ username, password, displayName, role });
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.status(201).json({ user: result.user });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al crear usuario." });
   }
-
-  res.status(201).json({ user: result.user });
 });
 
-app.patch("/api/users/:id/password", requireAuth, requireAdmin, (req, res) => {
+app.patch("/api/users/:id/password", requireAuth, requireAdmin, requireDatabase, async (req, res) => {
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  const result = updateUserPassword(req.params.id, password);
-  if (!result.ok) {
-    res.status(400).json({ error: result.error });
-    return;
+
+  try {
+    const result = await updateUserPassword(req.params.id, password);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al actualizar contrasena." });
   }
-  res.json({ ok: true });
 });
 
-app.patch("/api/users/:id", requireAuth, requireAdmin, (req: AuthenticatedRequest, res) => {
+app.patch("/api/users/:id", requireAuth, requireAdmin, requireDatabase, async (req: AuthenticatedRequest, res) => {
   const displayName = typeof req.body?.displayName === "string" ? req.body.displayName : "";
   const role = req.body?.role === "caja" ? "caja" : "admin";
   const active = req.body?.active !== false;
@@ -92,65 +130,118 @@ app.patch("/api/users/:id", requireAuth, requireAdmin, (req: AuthenticatedReques
     return;
   }
 
-  const result = updateUserDetails(req.params.id, { displayName, role, active });
-  if (!result.ok) {
-    res.status(400).json({ error: result.error });
-    return;
+  try {
+    const result = await updateUserDetails(req.params.id, { displayName, role, active });
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ user: result.user });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al actualizar usuario." });
   }
-
-  res.json({ user: result.user });
 });
 
-app.get("/api/app-state", requireAuth, (_req, res) => {
-  res.json(loadAppState());
+app.get("/api/app-state", requireAuth, requireDatabase, async (_req, res) => {
+  try {
+    const state = await loadAppState();
+    res.json(state);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al cargar datos." });
+  }
 });
 
-app.put("/api/app-state", requireAuth, (req, res) => {
+app.put("/api/app-state", requireAuth, requireDatabase, async (req, res) => {
   const payload = req.body as AppStatePayload;
   if (!payload || !Array.isArray(payload.products) || !Array.isArray(payload.transactions)) {
     res.status(400).json({ error: "Estado de aplicacion invalido." });
     return;
   }
 
-  saveAppState({
-    products: payload.products,
-    transactions: payload.transactions ?? [],
-    appointments: payload.appointments ?? [],
-    stockMovements: payload.stockMovements ?? [],
-    currentCashSession: payload.currentCashSession ?? null,
-    cashSessionHistory: payload.cashSessionHistory ?? [],
-  });
-
-  res.json({ ok: true });
+  try {
+    await saveAppState({
+      products: payload.products,
+      transactions: payload.transactions ?? [],
+      appointments: payload.appointments ?? [],
+      stockMovements: payload.stockMovements ?? [],
+      currentCashSession: payload.currentCashSession ?? null,
+      cashSessionHistory: payload.cashSessionHistory ?? [],
+      wholesaleClients: payload.wholesaleClients ?? [],
+    });
+    console.log(`[save] ${payload.products.length} producto(s) guardado(s) en ${getDatabaseLabel()}`);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("[save] error:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al guardar datos." });
+  }
 });
 
-app.post("/api/app-state/migrate", requireAuth, (req, res) => {
+app.post("/api/app-state/migrate", requireAuth, requireDatabase, async (req, res) => {
   const payload = req.body as AppStatePayload;
-  const current = loadAppState();
 
-  if (hasUserAppData(current)) {
-    res.json({ migrated: false, state: current });
-    return;
+  try {
+    const current = await loadAppState();
+
+    if (!shouldMigrateLocalState(current, payload)) {
+      res.json({ migrated: false, state: current });
+      return;
+    }
+
+    if (!payload || !Array.isArray(payload.products)) {
+      res.status(400).json({ error: "No hay datos para migrar." });
+      return;
+    }
+
+    await saveAppState({
+      products: payload.products,
+      transactions: payload.transactions ?? [],
+      appointments: payload.appointments ?? [],
+      stockMovements: payload.stockMovements ?? [],
+      currentCashSession: payload.currentCashSession ?? null,
+      cashSessionHistory: payload.cashSessionHistory ?? [],
+      wholesaleClients: payload.wholesaleClients ?? current.wholesaleClients ?? [],
+    });
+
+    const state = await loadAppState();
+    res.json({ migrated: true, state });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Error al migrar datos." });
   }
+});
 
-  if (!payload || !Array.isArray(payload.products)) {
-    res.status(400).json({ error: "No hay datos para migrar." });
-    return;
+const DB_RETRY_MS = 10_000;
+let connecting = false;
+
+async function connectDatabase() {
+  if (connecting) return;
+  connecting = true;
+
+  console.log("Conectando con Supabase...");
+  try {
+    const now = await initDatabase();
+    console.log(`Base de datos: ${getDatabaseLabel()}`);
+    console.log(`Conexion verificada: ${now}`);
+  } catch (error) {
+    await resetDatabase();
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("No se pudo conectar a Supabase:", message);
+    console.log(`Reintentando conexion en ${DB_RETRY_MS / 1000}s...`);
+    setTimeout(connectDatabase, DB_RETRY_MS);
+  } finally {
+    connecting = false;
   }
+}
 
-  saveAppState({
-    products: payload.products,
-    transactions: payload.transactions ?? [],
-    appointments: payload.appointments ?? [],
-    stockMovements: payload.stockMovements ?? [],
-    currentCashSession: payload.currentCashSession ?? null,
-    cashSessionHistory: payload.cashSessionHistory ?? [],
+function startServer() {
+  setDatabaseReconnectHandler(() => {
+    console.log("[db] Reconectando con Supabase...");
+    setTimeout(connectDatabase, 2000);
   });
 
-  res.json({ migrated: true, state: loadAppState() });
-});
+  app.listen(PORT, () => {
+    console.log(`Lexy API escuchando en http://localhost:${PORT}`);
+    void connectDatabase();
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`Lexy API escuchando en http://localhost:${PORT}`);
-  console.log(`Base de datos: ${db.name}`);
-});
+startServer();

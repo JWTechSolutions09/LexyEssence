@@ -3,6 +3,8 @@ import { ReportsBackLink } from "../components/ReportsBackLink";
 import { useAppContext } from "../context/AppContext";
 import { currency } from "../utils/format";
 import { buildCashReportPdfInput, exportCashReportPdf } from "../utils/exportCashReportPdf";
+import { getSaleTypeLabel, getTransactionDiscountLabel, getWholesaleClientLabel } from "../utils/dailyReportMetrics";
+import { isWholesaleTransaction } from "../utils/transactionSaleDetails";
 import {
   formatReportDateShort,
   getCashSessionsForDate,
@@ -289,14 +291,20 @@ export function CashReportsPage() {
           ) : (
             <div className="reports-table">
               {sortedFilteredTransactions.map((transaction) => (
-                <div className="list-item" key={transaction.id}>
+                <div className="list-item reports-tx-row" key={transaction.id}>
                   <div>
                     <strong>#{transaction.id}</strong>
-                    <p className="muted">{transaction.cliente}</p>
+                    <p className="muted">{getWholesaleClientLabel(transaction) ?? transaction.cliente}</p>
+                    {isWholesaleTransaction(transaction) && (
+                      <p className="muted reports-tx-wholesale">{getTransactionDiscountLabel(transaction)}</p>
+                    )}
                     {transaction.soldAt && (
                       <p className="muted reports-tx-time">{formatReportDateShort(transaction.soldAt)}</p>
                     )}
                   </div>
+                  <span className={`badge ${isWholesaleTransaction(transaction) ? "warn" : "success"}`}>
+                    {getSaleTypeLabel(transaction)}
+                  </span>
                   <span className="muted">{transaction.metodo}</span>
                   <span>{currency(transaction.monto)}</span>
                   <span className={transaction.estado === "Pendiente" ? "badge warn" : "badge success"}>

@@ -4,10 +4,11 @@ import { CashOpenModal } from "../components/CashOpenModal";
 import { CashPaymentModal } from "../components/CashPaymentModal";
 import { PosOptionPickerModal } from "../components/PosOptionPickerModal";
 import { TransferPaymentModal } from "../components/TransferPaymentModal";
+import { WholesaleClientModal } from "../components/WholesaleClientModal";
 import { useAppContext } from "../context/AppContext";
 import type { CashCloseSummary } from "../types/cashSession";
 import { findProductByCode, isScanTerminator, normalizeScanCode } from "../hooks/useBarcodeScanner";
-import type { Product, Transaction } from "../types/domain";
+import type { Product, Transaction, WholesaleClient, WholesaleDiscountPercent } from "../types/domain";
 import type { SaleReceipt } from "../types/receipt";
 import { currency } from "../utils/format";
 import { createStockMovement, movementsFromSale } from "../utils/stockMovements";
@@ -15,12 +16,18 @@ import { buildQuickProductFromScan } from "../utils/quickProduct";
 import { computeCloseSummary } from "../utils/cashSession";
 import { printThermalCashClose } from "../utils/printThermalCashClose";
 import { printThermalReceipt } from "../utils/printThermalReceipt";
+import {
+  computeWholesaleUnitPrice,
+  formatWholesaleCustomerLabel,
+} from "../utils/wholesaleClient";
+
+const WHOLESALE_CUSTOMER_VALUE = "Cliente Mayorista";
 
 const availabilityFilters = ["Todos", "Disponibles", "Stock bajo", "Agotados"] as const;
 const paymentMethods = ["Efectivo", "Tarjeta", "Transferencia", "Mixto"] as const;
 const customerOptions = [
   { value: "Cliente mostrador", label: "Cliente mostrador", hint: "Precio al detalle", pricingMode: "detalle" as const },
-  { value: "Cliente Mayorista", label: "Cliente Mayorista", hint: "Precio mayorista", pricingMode: "mayorista" as const },
+  { value: WHOLESALE_CUSTOMER_VALUE, label: "Cliente Mayorista", hint: "Buscar por cedula y descuento", pricingMode: "mayorista" as const },
   { value: "Envio", label: "Envio", hint: "Pedido para entrega", pricingMode: "detalle" as const },
 ];
 
@@ -61,6 +68,9 @@ export function PosPage() {
     openCashSession,
     closeCashSession,
     setNotice,
+    forceSave,
+    wholesaleClients,
+    addWholesaleClient,
   } = useAppContext();
 
   const [categoryFilter, setCategoryFilter] = useState("Todos");
@@ -88,6 +98,9 @@ export function PosPage() {
   const [cashCloseModalOpen, setCashCloseModalOpen] = useState(false);
   const [cashPaymentModalOpen, setCashPaymentModalOpen] = useState(false);
   const [closeSummaryPreview, setCloseSummaryPreview] = useState<CashCloseSummary | null>(null);
+  const [wholesaleModalOpen, setWholesaleModalOpen] = useState(false);
+  const [wholesaleClient, setWholesaleClient] = useState<WholesaleClient | null>(null);
+  const [wholesaleDiscountPercent, setWholesaleDiscountPercent] = useState<WholesaleDiscountPercent | null>(null);
   const scanInputRef = useRef<HTMLInputElement>(null);
   const unknownNameInputRef = useRef<HTMLInputElement>(null);
 
@@ -96,8 +109,30 @@ export function PosPage() {
     [products],
   );
 
-  function getSalePrice(product: Product, mode = pricingMode) {
-    return mode === "mayorista" ? product.precioMayorista : product.precio;
+  const getSalePrice = useCallback((product: Product, mode = pricingMode) => {
+    if (mode === "mayorista" && wholesaleDiscountPercent) {
+      return computeWholesaleUnitPrice(product, wholesaleDiscountPercent);
+    }
+    if (mode === "mayorista") {
+      return product.precioMayorista;
+    }
+    return product.precio;
+  }, [pricingMode, wholesaleDiscountPercent]);
+
+  const customerDisplayLabel = useMemo(() => {
+    if (wholesaleClient && wholesaleDiscountPercent) {
+      return formatWholesaleCustomerLabel(
+        wholesaleClient.salon,
+        wholesaleClient.cedula,
+        wholesaleDiscountPercent,
+      );
+    }
+    return customerName;
+  }, [wholesaleClient, wholesaleDiscountPercent, customerName]);
+
+  function resetWholesaleSelection() {
+    setWholesaleClient(null);
+    setWholesaleDiscountPercent(null);
   }
 
   useEffect(() => {
@@ -113,7 +148,7 @@ export function PosPage() {
         };
       })
       .filter((item) => item.cantidad > 0));
-  }, [pricingMode, products, setCart]);
+  }, [getSalePrice, pricingMode, products, setCart]);
 
   const cartItemCount = useMemo(
     () => cart.reduce((acc, item) => acc + item.cantidad, 0),
@@ -182,7 +217,7 @@ export function PosPage() {
 
     setNotice(`Producto agregado: ${product.nombre}`);
     return true;
-  }, [lastReceipt, pricingMode, setCart, setNotice]);
+  }, [getSalePrice, lastReceipt, setCart, setNotice]);
 
   const registerScannedCode = useCallback((rawCode: string) => {
     const code = normalizeScanCode(rawCode);
@@ -250,10 +285,39 @@ export function PosPage() {
   }
 
   function selectCustomer(value: string) {
+    setSalePickerModal(null);
+
+    if (value === WHOLESALE_CUSTOMER_VALUE) {
+      setWholesaleModalOpen(true);
+      return;
+    }
+
+    resetWholesaleSelection();
     const option = customerOptions.find((entry) => entry.value === value);
     setCustomerName(value);
     if (option) setPricingMode(option.pricingMode);
-    setSalePickerModal(null);
+  }
+
+  function handleWholesaleConfirm(client: WholesaleClient, discountPercent: WholesaleDiscountPercent) {
+    setWholesaleClient(client);
+    setWholesaleDiscountPercent(discountPercent);
+    setCustomerName(WHOLESALE_CUSTOMER_VALUE);
+    setPricingMode("mayorista");
+    setWholesaleModalOpen(false);
+    setNotice(`Mayorista: ${client.salon} con ${discountPercent}% de descuento en todos los productos.`);
+    void forceSave();
+  }
+
+  function handleWholesaleAddClient(cedula: string, salon: string) {
+    return addWholesaleClient(cedula, salon);
+  }
+
+  function closeWholesaleModal() {
+    setWholesaleModalOpen(false);
+  }
+
+  function openWholesaleModal() {
+    setWholesaleModalOpen(true);
   }
 
   function selectPayment(value: string) {
@@ -326,6 +390,7 @@ export function PosPage() {
     openCashSession(openingAmount, openedAt);
     setCashOpenModalOpen(false);
     setNotice(`Caja abierta con ${currency(openingAmount)} el ${formatDateTime(openedAt)}.`);
+    void forceSave();
   }
 
   async function handleCashCloseConfirm() {
@@ -355,17 +420,18 @@ export function PosPage() {
         ? "Caja cerrada. Imprimiendo recibo de cierre..."
         : "Caja cerrada. No se pudo abrir la impresion del cierre.",
     );
+    void forceSave();
   }
 
   const shouldRefocusScanner = useCallback(() => {
-    if (unknownScanDraft || salePickerModal || transferModalOpen || cashOpenModalOpen || cashCloseModalOpen) {
+    if (unknownScanDraft || salePickerModal || transferModalOpen || cashOpenModalOpen || cashCloseModalOpen || wholesaleModalOpen) {
       return false;
     }
     const active = document.activeElement;
     if (!active) return true;
     if (active === scanInputRef.current) return false;
     return !active.closest("[data-manual-input]");
-  }, [cashCloseModalOpen, cashOpenModalOpen, cashPaymentModalOpen, salePickerModal, transferModalOpen, unknownScanDraft]);
+  }, [cashCloseModalOpen, cashOpenModalOpen, cashPaymentModalOpen, salePickerModal, transferModalOpen, unknownScanDraft, wholesaleModalOpen]);
 
   useEffect(() => {
     if (!unknownScanDraft) return;
@@ -458,6 +524,8 @@ export function PosPage() {
   function clearSale() {
     setCart([]);
     setCustomerName("Cliente mostrador");
+    resetWholesaleSelection();
+    setPricingMode("detalle");
     setPaymentMethod("Efectivo");
     setTransferConfirmed(null);
     setTransferModalOpen(false);
@@ -511,7 +579,7 @@ export function PosPage() {
     const receipt: SaleReceipt = {
       invoiceNumber,
       soldAt,
-      customerName: customerName.trim() || "Cliente mostrador",
+      customerName: customerDisplayLabel.trim() || "Cliente mostrador",
       paymentMethod,
       pricingMode,
       subtotal,
@@ -537,6 +605,16 @@ export function PosPage() {
       return { ...product, stock: Math.max(0, product.stock - inCart.cantidad) };
     }));
 
+    const listSubtotal = cart.reduce((acc, item) => {
+      const source = products.find((product) => product.id === item.id);
+      const listPrice = source?.precio ?? item.precio;
+      return acc + listPrice * item.cantidad;
+    }, 0);
+
+    const wholesaleDiscountAmount = wholesaleDiscountPercent
+      ? Math.max(0, Math.round((listSubtotal - subtotal) * 100) / 100)
+      : undefined;
+
     const isPendingTransfer = paymentMethod === "Transferencia" && transferConfirmed === false;
     const trx: Transaction = {
       id: invoiceNumber,
@@ -547,11 +625,26 @@ export function PosPage() {
       soldAt,
       items: isPendingTransfer
         ? undefined
-        : receipt.items.map((item) => ({
-            productId: item.id,
-            nombre: item.nombre,
-            cantidad: item.cantidad,
-          })),
+        : cart.map((item) => {
+            const source = products.find((product) => product.id === item.id);
+            return {
+              productId: item.id,
+              nombre: item.nombre,
+              cantidad: item.cantidad,
+              precioUnitario: item.precio,
+              precioLista: source?.precio ?? item.precio,
+            };
+          }),
+      pricingMode,
+      subtotal,
+      listSubtotal,
+      discountAmount: discount > 0 ? discount : undefined,
+      wholesaleDiscountPercent: wholesaleDiscountPercent ?? undefined,
+      wholesaleDiscountAmount,
+      wholesaleClientId: wholesaleClient?.id,
+      wholesaleSalon: wholesaleClient?.salon,
+      wholesaleCedula: wholesaleClient?.cedula,
+      note: saleNote.trim() || undefined,
     };
 
     setTransactions((prev) => [trx, ...prev]);
@@ -567,6 +660,8 @@ export function PosPage() {
     setDiscountInput("0");
     setSaleNote("");
     setCustomerName("Cliente mostrador");
+    resetWholesaleSelection();
+    setPricingMode("detalle");
     setPaymentMethod("Efectivo");
     setTransferConfirmed(null);
     setCashPaymentModalOpen(false);
@@ -580,6 +675,7 @@ export function PosPage() {
     if (!isPendingTransfer) {
       void printReceipt(receipt);
     }
+    void forceSave();
   }
 
   return (
@@ -666,7 +762,7 @@ export function PosPage() {
 
           <div className="row">
             <span className="muted">Mostrando {visibleProducts.length} productos</span>
-            <span className="muted">Modo de precio: {pricingMode === "detalle" ? "Cliente" : "Mayorista"}</span>
+            <span className="muted">Modo de precio: {pricingMode === "detalle" ? "Cliente" : wholesaleDiscountPercent ? `Mayorista (${wholesaleDiscountPercent}% desc.)` : "Mayorista"}</span>
           </div>
         </div>
 
@@ -698,7 +794,13 @@ export function PosPage() {
                 <div className="pos-product-footer">
                   <div className="pos-price-block">
                     <strong>{currency(salePrice)}</strong>
-                    <span className="muted">{pricingMode === "detalle" ? "Precio cliente" : "Precio mayorista"}</span>
+                    <span className="muted">
+                      {pricingMode === "detalle"
+                        ? "Precio cliente"
+                        : wholesaleDiscountPercent
+                          ? `Precio con ${wholesaleDiscountPercent}% desc.`
+                          : "Precio mayorista"}
+                    </span>
                   </div>
                   <div className="actions pos-card-actions">
                     <button
@@ -741,10 +843,16 @@ export function PosPage() {
               <button
                 type="button"
                 className="pos-picker-trigger"
-                onClick={() => setSalePickerModal("customer")}
+                onClick={() => {
+                  if (wholesaleClient) {
+                    openWholesaleModal();
+                    return;
+                  }
+                  setSalePickerModal("customer");
+                }}
               >
                 <span className="pos-picker-trigger-label">Cliente</span>
-                <span className="pos-picker-trigger-value">{customerName}</span>
+                <span className="pos-picker-trigger-value">{customerDisplayLabel}</span>
                 <span className="material-symbols-outlined pos-picker-trigger-icon">expand_more</span>
               </button>
               <button
@@ -765,18 +873,27 @@ export function PosPage() {
               <button
                 type="button"
                 className={pricingMode === "detalle" ? "" : "ghost"}
-                onClick={() => setPricingMode("detalle")}
+                onClick={() => {
+                  resetWholesaleSelection();
+                  setCustomerName("Cliente mostrador");
+                  setPricingMode("detalle");
+                }}
               >
                 Cliente
               </button>
               <button
                 type="button"
                 className={pricingMode === "mayorista" ? "" : "ghost"}
-                onClick={() => setPricingMode("mayorista")}
+                onClick={openWholesaleModal}
               >
                 Mayorista
               </button>
             </div>
+            {wholesaleClient && wholesaleDiscountPercent && (
+              <p className="pos-wholesale-active muted">
+                {wholesaleClient.salon} · {wholesaleDiscountPercent}% en todos los productos
+              </p>
+            )}
             {currentCashSession && (
               <p className="pos-cash-session-info muted">
                 Abierta: {formatDateTime(currentCashSession.openedAt)} ·
@@ -867,20 +984,22 @@ export function PosPage() {
 
         <div className="pos-cart-footer compact">
           <h3 className="pos-section-label">Cobro</h3>
-          <label className="pos-field pos-field-full">
-            Descuento
-            <input
-              className="pos-input"
-              data-manual-input
-              type="number"
-              min="0"
-              step="0.01"
-              value={discountInput}
-              onChange={(event) => setDiscountInput(event.target.value)}
-              onBlur={handleCaptureBlur}
-              placeholder="0.00"
-            />
-          </label>
+          {!wholesaleDiscountPercent && (
+            <label className="pos-field pos-field-full">
+              Descuento
+              <input
+                className="pos-input"
+                data-manual-input
+                type="number"
+                min="0"
+                step="0.01"
+                value={discountInput}
+                onChange={(event) => setDiscountInput(event.target.value)}
+                onBlur={handleCaptureBlur}
+                placeholder="0.00"
+              />
+            </label>
+          )}
 
           <label className="pos-field pos-field-full pos-note-field">
             Nota de la venta
@@ -930,11 +1049,20 @@ export function PosPage() {
       {salePickerModal === "customer" && (
         <PosOptionPickerModal
           title="Tipo de cliente"
-          description="Selecciona el tipo de venta. Mayorista aplica precio mayorista automaticamente."
+          description="Mayorista abre el registro por cedula y aplica descuento del 5% o 10%."
           options={customerOptions}
-          selectedValue={customerName}
+          selectedValue={wholesaleClient ? WHOLESALE_CUSTOMER_VALUE : customerName}
           onSelect={selectCustomer}
           onClose={() => setSalePickerModal(null)}
+        />
+      )}
+
+      {wholesaleModalOpen && (
+        <WholesaleClientModal
+          clients={wholesaleClients}
+          onConfirm={handleWholesaleConfirm}
+          onAddClient={handleWholesaleAddClient}
+          onClose={closeWholesaleModal}
         />
       )}
 

@@ -6,6 +6,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AppProvider } from "./context/AppContext";
 import { AuthProvider } from "./context/AuthContext";
 import { AgendaPage } from "./pages/AgendaPage";
+import { DailyReportPage } from "./pages/DailyReportPage";
 import { CashReportsPage } from "./pages/CashReportsPage";
 import { HomePage } from "./pages/HomePage";
 import { InventoryPage } from "./pages/InventoryPage";
@@ -15,6 +16,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { PosPage } from "./pages/PosPage";
 import { ReportsHomePage } from "./pages/ReportsHomePage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { WholesaleClientsPage } from "./pages/WholesaleClientsPage";
 export default function App() {
   return (
     <BrowserRouter>
@@ -31,9 +33,11 @@ export default function App() {
                 <Route element={<AdminRoute />}>
                   <Route path="/" element={<HomePage />} />
                   <Route path="/reportes" element={<ReportsHomePage />} />
+                  <Route path="/reportes/dia" element={<DailyReportPage />} />
                   <Route path="/reportes/caja" element={<CashReportsPage />} />
                   <Route path="/reportes/inventario" element={<InventoryReportsPage />} />
                   <Route path="/proveedores" element={<Navigate to="/" replace />} />
+                  <Route path="/clientes-mayoristas" element={<WholesaleClientsPage />} />
                   <Route path="/configuracion" element={<SettingsPage />} />
                 </Route>
                 <Route path="*" element={<NotFoundPage />} />

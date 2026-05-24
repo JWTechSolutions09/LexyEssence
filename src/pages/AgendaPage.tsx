@@ -13,7 +13,7 @@ import {
 } from "../utils/agendaSlots";
 
 export function AgendaPage() {
-  const { appointments, setAppointments, setNotice } = useAppContext();
+  const { appointments, setAppointments, setNotice, forceSave } = useAppContext();
   const { isAdmin } = useAuth();
 
   const [selectedDate, setSelectedDate] = useState(() => toLocalDateKey());
@@ -87,6 +87,7 @@ export function AgendaPage() {
     }
 
     closeModal();
+    void forceSave();
   }
 
   function deleteAppointment(appointment: Appointment) {
@@ -95,6 +96,7 @@ export function AgendaPage() {
 
     setAppointments((prev) => prev.filter((entry) => entry.id !== appointment.id));
     setNotice(`Cita de ${appointment.cliente} eliminada.`);
+    void forceSave();
   }
 
   function clearDayAgenda() {
@@ -108,6 +110,7 @@ export function AgendaPage() {
 
     setAppointments((prev) => prev.filter((appointment) => appointment.date !== selectedDate));
     setNotice("Citas del dia eliminadas.");
+    void forceSave();
   }
 
   return (

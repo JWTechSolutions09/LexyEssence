@@ -2,6 +2,7 @@ import type { CashSession } from "../types/cashSession";
 import type { Transaction } from "../types/domain";
 import { currency } from "./format";
 import { PdfBuilder } from "./pdfBuilder";
+import { getSaleTypeLabel, getTransactionDiscountLabel } from "./dailyReportMetrics";
 import {
   formatReportDateShort,
   type SalesSummary,
@@ -119,16 +120,17 @@ export function exportCashReportPdf(input: CashReportPdfInput) {
 
   pdf.addSection(`Detalle de ventas · ${periodLabel}`);
   pdf.addTable(
-    ["Factura", "Fecha", "Cliente", "Metodo", "Estado", "Monto"],
+    ["Factura", "Fecha", "Cliente", "Tipo", "Descuento", "Metodo", "Monto"],
     sortedTransactions.map((transaction) => [
       transaction.id,
       transaction.soldAt ? formatReportDateShort(transaction.soldAt) : "-",
-      transaction.cliente,
+      transaction.wholesaleSalon ?? transaction.cliente,
+      getSaleTypeLabel(transaction),
+      getTransactionDiscountLabel(transaction),
       transaction.metodo,
-      transaction.estado,
       currency(transaction.monto),
     ]),
-    [24, 32, 38, 24, 22, 24],
+    [22, 28, 34, 20, 34, 22, 22],
   );
 
   const linesWithItems = sortedTransactions.flatMap((transaction) => (

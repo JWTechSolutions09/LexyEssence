@@ -5,6 +5,7 @@ import type {
   Product,
   StockMovement,
   Transaction,
+  WholesaleClient,
 } from "../types/domain";
 import type { AuthUser } from "../config/auth";
 
@@ -17,6 +18,7 @@ export type AppStatePayload = {
   stockMovements: StockMovement[];
   currentCashSession: CashSession | null;
   cashSessionHistory: CashSession[];
+  wholesaleClients: WholesaleClient[];
 };
 
 export class ApiError extends Error {
@@ -70,6 +72,10 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   }
 
   return data as T;
+}
+
+export async function fetchAuthMe() {
+  return apiFetch<{ user: AuthSession }>("/api/auth/me");
 }
 
 export async function checkApiHealth() {

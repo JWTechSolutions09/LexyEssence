@@ -1,12 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   createUserRequest,
+  fetchAuthMe,
   fetchUsers,
   getApiToken,
   loginRequest,
   setApiToken,
   updateUserDetailsRequest,
   updateUserPasswordRequest,
+  ApiError,
 } from "../api/client";
 import {
   defaultAuthUsers,
@@ -69,9 +71,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   useEffect(() => {
-    if (user && !getApiToken()) {
-      setUser(null);
+    async function validateSession() {
+      if (!user) return;
+
+      if (!getApiToken()) {
+        setUser(null);
+        return;
+      }
+
+      try {
+        await fetchAuthMe();
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          setApiToken(null);
+          setUser(null);
+        }
+      }
     }
+
+    void validateSession();
   }, []);
 
   useEffect(() => {

@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import type { AuthUser, UserRole } from "../src/config/auth.js";
-import { db } from "./db.js";
+import { getPool } from "./db.js";
 
 const JWT_SECRET = process.env.LEXY_JWT_SECRET ?? "lexy-essence-dev-secret-change-in-production";
 const TOKEN_TTL = "7d";
@@ -25,7 +25,7 @@ function rowToAuthUser(row: Record<string, unknown>): AuthUser {
     password: String(row.password),
     displayName: String(row.display_name),
     role: row.role === "caja" ? "caja" : "admin",
-    active: Number(row.active) === 1,
+    active: row.active === true || row.active === 1,
   };
 }
 
@@ -60,12 +60,13 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   next();
 }
 
-export function loginUser(username: string, password: string) {
-  const row = db.prepare(`
+export async function loginUser(username: string, password: string) {
+  const result = await getPool().query(`
     SELECT * FROM users
-    WHERE username = ? AND active = 1
-  `).get(username.trim()) as Record<string, unknown> | undefined;
+    WHERE username = $1 AND active = TRUE
+  `, [username.trim()]);
 
+  const row = result.rows[0] as Record<string, unknown> | undefined;
   if (!row) return null;
 
   const valid = bcrypt.compareSync(password, String(row.password_hash));
@@ -86,12 +87,12 @@ export function loginUser(username: string, password: string) {
   };
 }
 
-export function listUsers() {
-  return (db.prepare("SELECT * FROM users ORDER BY display_name").all() as Record<string, unknown>[])
-    .map(rowToAuthUser);
+export async function listUsers() {
+  const result = await getPool().query("SELECT * FROM users ORDER BY display_name");
+  return result.rows.map((row) => rowToAuthUser(row as Record<string, unknown>));
 }
 
-export function createUser(input: {
+export async function createUser(input: {
   username: string;
   password: string;
   displayName: string;
@@ -101,45 +102,49 @@ export function createUser(input: {
   const displayName = input.displayName.trim();
   const password = input.password.trim();
 
-  const exists = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
-  if (exists) {
+  const exists = await getPool().query("SELECT id FROM users WHERE username = $1", [username]);
+  if (exists.rowCount && exists.rowCount > 0) {
     return { ok: false as const, error: "Ese nombre de usuario ya existe." };
   }
 
   const id = `user-${Date.now()}`;
-  db.prepare(`
+  await getPool().query(`
     INSERT INTO users (id, username, password, password_hash, display_name, role, active)
-    VALUES (?, ?, ?, ?, ?, ?, 1)
-  `).run(
+    VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+  `, [
     id,
     username,
     password,
     bcrypt.hashSync(password, 10),
     displayName,
     input.role,
-  );
+  ]);
 
-  return { ok: true as const, user: rowToAuthUser(db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>) };
+  const created = await getPool().query("SELECT * FROM users WHERE id = $1", [id]);
+  return {
+    ok: true as const,
+    user: rowToAuthUser(created.rows[0] as Record<string, unknown>),
+  };
 }
 
-export function updateUserPassword(userId: string, password: string) {
+export async function updateUserPassword(userId: string, password: string) {
   const nextPassword = password.trim();
   if (!nextPassword) {
     return { ok: false as const, error: "La contrasena no puede estar vacia." };
   }
 
-  const result = db.prepare(`
-    UPDATE users SET password = ?, password_hash = ? WHERE id = ?
-  `).run(nextPassword, bcrypt.hashSync(nextPassword, 10), userId);
+  const result = await getPool().query(`
+    UPDATE users SET password = $1, password_hash = $2 WHERE id = $3
+  `, [nextPassword, bcrypt.hashSync(nextPassword, 10), userId]);
 
-  if (result.changes === 0) {
+  if (!result.rowCount) {
     return { ok: false as const, error: "Usuario no encontrado." };
   }
 
   return { ok: true as const };
 }
 
-export function updateUserDetails(
+export async function updateUserDetails(
   userId: string,
   input: { displayName: string; role: UserRole; active: boolean },
 ) {
@@ -148,30 +153,28 @@ export function updateUserDetails(
     return { ok: false as const, error: "El nombre es obligatorio." };
   }
 
-  const target = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as Record<string, unknown> | undefined;
+  const targetResult = await getPool().query("SELECT * FROM users WHERE id = $1", [userId]);
+  const target = targetResult.rows[0] as Record<string, unknown> | undefined;
   if (!target) {
     return { ok: false as const, error: "Usuario no encontrado." };
   }
 
   if (!input.active && target.role === "admin") {
-    const adminCount = db.prepare(`
-      SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND active = 1
-    `).get() as { count: number };
-    if (adminCount.count <= 1) {
+    const adminCount = await getPool().query(`
+      SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND active = TRUE
+    `);
+    if ((adminCount.rows[0]?.count as number) <= 1) {
       return { ok: false as const, error: "Debe quedar al menos un administrador activo." };
     }
   }
 
-  db.prepare(`
-    UPDATE users SET display_name = ?, role = ?, active = ? WHERE id = ?
-  `).run(displayName, input.role, input.active ? 1 : 0, userId);
+  await getPool().query(`
+    UPDATE users SET display_name = $1, role = $2, active = $3 WHERE id = $4
+  `, [displayName, input.role, input.active, userId]);
 
-  return { ok: true as const, user: rowToAuthUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as Record<string, unknown>) };
-}
-
-export function countActiveAdmins() {
-  const row = db.prepare(`
-    SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND active = 1
-  `).get() as { count: number };
-  return row.count;
+  const updated = await getPool().query("SELECT * FROM users WHERE id = $1", [userId]);
+  return {
+    ok: true as const,
+    user: rowToAuthUser(updated.rows[0] as Record<string, unknown>),
+  };
 }

@@ -1,131 +1,161 @@
-import Database from "better-sqlite3";
-import bcrypt from "bcryptjs";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { seedProducts, seedUsers } from "./seed.js";
+import dns from "node:dns";
+import dotenv from "dotenv";
+import pg from "pg";
+import { seedProducts } from "./seed.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "..", "data");
-const dbPath = path.join(dataDir, "lexy.db");
+dotenv.config();
+dns.setDefaultResultOrder("ipv4first");
 
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+const rawConnectionString = process.env.DATABASE_URL;
+
+if (!rawConnectionString) {
+  throw new Error("DATABASE_URL no esta configurada. Revisa tu archivo .env");
 }
 
-export const db = new Database(dbPath);
+const CONNECTION_TIMEOUT_MS = 10_000;
 
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+export let pool: pg.Pool | undefined;
 
-export function initDatabase() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
+let reconnectHandler: (() => void) | null = null;
+let reconnectPending = false;
+
+export function setDatabaseReconnectHandler(handler: () => void) {
+  reconnectHandler = handler;
+}
+
+export function isDatabaseReady() {
+  return pool !== undefined;
+}
+
+export function getPool() {
+  if (!pool) {
+    throw new Error("Conectando con Supabase...");
+  }
+  return pool;
+}
+
+function getHostname() {
+  try {
+    const url = new URL(rawConnectionString.replace("postgresql://", "http://"));
+    return url.hostname;
+  } catch {
+    return "Supabase";
+  }
+}
+
+function schedulePoolReconnect() {
+  if (reconnectPending || !reconnectHandler) return;
+  reconnectPending = true;
+  reconnectHandler();
+}
+
+async function closePool() {
+  if (!pool) return;
+  const current = pool;
+  pool = undefined;
+  await current.end().catch(() => undefined);
+}
+
+function attachPoolErrorHandler(activePool: pg.Pool) {
+  activePool.on("error", (error) => {
+    console.error("[db] Conexion perdida:", error.message);
+    void closePool().finally(() => {
+      reconnectPending = false;
+      schedulePoolReconnect();
+    });
+  });
+}
+
+async function ensureSchema(activePool: pg.Pool) {
+  await activePool.query(`
+    CREATE TABLE IF NOT EXISTS wholesale_clients (
       id TEXT PRIMARY KEY,
-      username TEXT NOT NULL UNIQUE,
-      password TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      display_name TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('admin', 'caja')),
-      active INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS products (
-      id TEXT PRIMARY KEY,
-      nombre TEXT NOT NULL,
-      marca TEXT NOT NULL,
-      descripcion TEXT NOT NULL DEFAULT '',
-      categoria TEXT NOT NULL,
-      costo REAL NOT NULL DEFAULT 0,
-      precio REAL NOT NULL DEFAULT 0,
-      precio_mayorista REAL NOT NULL DEFAULT 0,
-      stock INTEGER NOT NULL DEFAULT 0,
-      stock_minimo INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      cliente TEXT NOT NULL,
-      monto REAL NOT NULL,
-      metodo TEXT NOT NULL,
-      estado TEXT NOT NULL,
-      sold_at TEXT,
-      items_json TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS appointments (
-      id TEXT PRIMARY KEY,
-      date TEXT NOT NULL,
-      hora TEXT NOT NULL,
-      cliente TEXT NOT NULL,
-      servicios_json TEXT NOT NULL,
-      total REAL NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS stock_movements (
-      id TEXT PRIMARY KEY,
-      tipo TEXT NOT NULL CHECK (tipo IN ('entrada', 'salida')),
-      product_id TEXT NOT NULL,
-      nombre TEXT NOT NULL,
-      cantidad INTEGER NOT NULL,
-      motivo TEXT NOT NULL,
-      fecha TEXT NOT NULL,
-      referencia TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS cash_sessions (
-      id TEXT PRIMARY KEY,
-      opened_at TEXT NOT NULL,
-      closed_at TEXT,
-      opening_amount REAL NOT NULL,
-      close_summary_json TEXT,
-      is_current INTEGER NOT NULL DEFAULT 0
-    );
+      cedula TEXT NOT NULL UNIQUE,
+      salon TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
   `);
 
-  const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
-  if (userCount.count === 0) {
-    const insertUser = db.prepare(`
-      INSERT INTO users (id, username, password, password_hash, display_name, role, active)
-      VALUES (@id, @username, @password, @password_hash, @display_name, @role, @active)
-    `);
+  await activePool.query(`
+    ALTER TABLE transactions
+    ADD COLUMN IF NOT EXISTS sale_details_json JSONB
+  `);
 
-    for (const user of seedUsers) {
-      insertUser.run({
-        id: user.id,
-        username: user.username,
-        password: user.password,
-        password_hash: bcrypt.hashSync(user.password, 10),
-        display_name: user.displayName,
-        role: user.role,
-        active: user.active ? 1 : 0,
-      });
-    }
-  }
+  const count = await activePool.query("SELECT COUNT(*)::int AS count FROM products");
+  if ((count.rows[0]?.count as number) > 0) return;
 
-  const productCount = db.prepare("SELECT COUNT(*) AS count FROM products").get() as { count: number };
-  if (productCount.count === 0) {
-    const insertProduct = db.prepare(`
+  for (const product of seedProducts) {
+    await activePool.query(`
       INSERT INTO products (
         id, nombre, marca, descripcion, categoria, costo, precio, precio_mayorista, stock, stock_minimo
-      ) VALUES (
-        @id, @nombre, @marca, @descripcion, @categoria, @costo, @precio, @precio_mayorista, @stock, @stock_minimo
-      )
-    `);
-
-    for (const product of seedProducts) {
-      insertProduct.run({
-        id: product.id,
-        nombre: product.nombre,
-        marca: product.marca,
-        descripcion: product.descripcion,
-        categoria: product.categoria,
-        costo: product.costo,
-        precio: product.precio,
-        precio_mayorista: product.precioMayorista,
-        stock: product.stock,
-        stock_minimo: product.stockMinimo,
-      });
-    }
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      product.id,
+      product.nombre,
+      product.marca,
+      product.descripcion,
+      product.categoria,
+      product.costo,
+      product.precio,
+      product.precioMayorista,
+      product.stock,
+      product.stockMinimo,
+    ]);
   }
+
+  console.log(`Productos iniciales insertados: ${seedProducts.length}`);
+}
+
+export async function initDatabase() {
+  if (pool) {
+    return pingDatabase();
+  }
+
+  const probe = new pg.Client({
+    connectionString: rawConnectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+  });
+
+  try {
+    await probe.connect();
+    const result = await probe.query("SELECT NOW() AS now");
+    await probe.end();
+
+    const activePool = new pg.Pool({
+      connectionString: rawConnectionString,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+      idleTimeoutMillis: 30_000,
+    });
+
+    attachPoolErrorHandler(activePool);
+    await ensureSchema(activePool);
+
+    pool = activePool;
+    reconnectPending = false;
+    console.log(`Conexion Supabase via ${getHostname()}`);
+    return result.rows[0]?.now as string;
+  } catch (error) {
+    await probe.end().catch(() => undefined);
+    await closePool();
+    throw error;
+  }
+}
+
+export async function resetDatabase() {
+  await closePool();
+  reconnectPending = false;
+}
+
+export async function pingDatabase() {
+  const activePool = getPool();
+  const result = await activePool.query("SELECT NOW() AS now");
+  return result.rows[0]?.now as string;
+}
+
+export function getDatabaseLabel() {
+  return `Supabase (${getHostname()})`;
 }
