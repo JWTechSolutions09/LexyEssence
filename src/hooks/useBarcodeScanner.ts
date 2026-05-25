@@ -1,4 +1,5 @@
 import type { Product } from "../types/domain";
+import { findAmpollaByCode, isAmpolla } from "../utils/ampolla";
 
 /** Removes control chars some scanners prefix/suffix (STX, CR, etc.). */
 export function normalizeScanCode(raw: string) {
@@ -9,7 +10,13 @@ export function findProductByCode(products: Product[], rawCode: string): Product
   const code = normalizeScanCode(rawCode).toUpperCase();
   if (!code) return undefined;
 
-  return products.find((product) => product.id.trim().toUpperCase() === code);
+  const ampolla = findAmpollaByCode(products, code);
+  if (ampolla) return ampolla;
+
+  return products.find((product) => {
+    if (isAmpolla(product)) return false;
+    return product.id.trim().toUpperCase() === code;
+  });
 }
 
 export function isScanTerminator(key: string) {

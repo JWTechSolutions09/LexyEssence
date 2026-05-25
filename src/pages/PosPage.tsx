@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { AmpollaSaleModal } from "../components/AmpollaSaleModal";
 import { CashCloseModal } from "../components/CashCloseModal";
 import { CashOpenModal } from "../components/CashOpenModal";
 import { CashPaymentModal } from "../components/CashPaymentModal";
@@ -8,7 +9,19 @@ import { WholesaleClientModal } from "../components/WholesaleClientModal";
 import { useAppContext } from "../context/AppContext";
 import type { CashCloseSummary } from "../types/cashSession";
 import { findProductByCode, isScanTerminator, normalizeScanCode } from "../hooks/useBarcodeScanner";
-import type { Product, Transaction, WholesaleClient, WholesaleDiscountPercent } from "../types/domain";
+import type { AmpollaVentaTipo, Product, Transaction, WholesaleClient, WholesaleDiscountPercent } from "../types/domain";
+import {
+  buildAmpollaCartItem,
+  getAmpollaCartLineId,
+  getAmpollaPrecioBase,
+  getAmpollaSalePrice,
+  formatAmpollaStockLabel,
+  getMaxCantidadVenta,
+  getUnidadesDescontadasFromCartItem,
+  isAmpolla,
+  matchesAmpollaSearch,
+  validarStockAmpollaEnCarrito,
+} from "../utils/ampolla";
 import type { SaleReceipt } from "../types/receipt";
 import { currency } from "../utils/format";
 import { createStockMovement, movementsFromSale } from "../utils/stockMovements";
@@ -104,12 +117,24 @@ export function PosPage() {
   const [wholesaleClient, setWholesaleClient] = useState<WholesaleClient | null>(null);
   const [wholesaleDiscountPercent, setWholesaleDiscountPercent] = useState<WholesaleDiscountPercent | null>(null);
   const [checkoutExtrasOpen, setCheckoutExtrasOpen] = useState(false);
+  const [posCatalogView, setPosCatalogView] = useState<"catalog" | "ampollas">("catalog");
+  const [ampollaSaleProduct, setAmpollaSaleProduct] = useState<Product | null>(null);
   const scanInputRef = useRef<HTMLInputElement>(null);
   const unknownNameInputRef = useRef<HTMLInputElement>(null);
 
-  const categories = useMemo(
-    () => ["Todos", ...new Set(products.map((product) => product.categoria))],
+  const catalogProducts = useMemo(
+    () => products.filter((product) => !isAmpolla(product)),
     [products],
+  );
+
+  const ampollaProducts = useMemo(
+    () => products.filter((product) => isAmpolla(product)),
+    [products],
+  );
+
+  const categories = useMemo(
+    () => ["Todos", ...new Set(catalogProducts.map((product) => product.categoria))],
+    [catalogProducts],
   );
 
   const getSalePrice = useCallback((product: Product, mode = pricingMode) => {
@@ -138,20 +163,37 @@ export function PosPage() {
     setWholesaleDiscountPercent(null);
   }
 
+  const getAmpollaPrice = useCallback((product: Product, tipo: AmpollaVentaTipo) => (
+    getAmpollaSalePrice(product, tipo, pricingMode, wholesaleDiscountPercent)
+  ), [pricingMode, wholesaleDiscountPercent]);
+
   useEffect(() => {
     setCart((prev) => prev
       .map((item) => {
         const source = products.find((product) => product.id === item.id);
         if (!source) return item;
 
+        const cartLineId = item.cartLineId ?? item.id;
+        const maxQty = item.ampollaVentaTipo
+          ? getMaxCantidadVenta(source, item.ampollaVentaTipo)
+          : source.stock;
+        const precio = item.ampollaVentaTipo
+          ? getAmpollaPrice(source, item.ampollaVentaTipo)
+          : getSalePrice(source, pricingMode);
+
         return {
+          ...item,
           ...source,
-          cantidad: Math.min(item.cantidad, source.stock),
-          precio: getSalePrice(source, pricingMode),
+          cartLineId,
+          cantidad: Math.min(item.cantidad, maxQty),
+          precio,
+          nombre: item.ampollaVentaTipo
+            ? `${source.nombre} - ${item.ampollaVentaTipo === "caja" ? "Caja" : "Unidad"}`
+            : source.nombre,
         };
       })
       .filter((item) => item.cantidad > 0));
-  }, [getSalePrice, pricingMode, products, setCart]);
+  }, [getAmpollaPrice, getSalePrice, pricingMode, products, setCart]);
 
   const cartItemCount = useMemo(
     () => cart.reduce((acc, item) => acc + item.cantidad, 0),
@@ -168,35 +210,84 @@ export function PosPage() {
 
   const searchQuery = search.trim().toLowerCase();
 
-  const filteredProducts = useMemo(() => products.filter((product) => {
-    const categoryMatch = categoryFilter === "Todos" || product.categoria === categoryFilter;
-    const availabilityMatch =
-      availabilityFilter === "Todos"
-      || (availabilityFilter === "Disponibles" && product.stock > product.stockMinimo)
-      || (availabilityFilter === "Stock bajo" && product.stock > 0 && product.stock <= product.stockMinimo)
-      || (availabilityFilter === "Agotados" && product.stock <= 0);
-    const searchMatch = !searchQuery
-      || `${product.nombre} ${product.id} ${product.marca} ${product.categoria}`
-        .toLowerCase()
-        .includes(searchQuery);
+  const filteredProducts = useMemo(() => {
+    const source = posCatalogView === "ampollas" ? ampollaProducts : catalogProducts;
 
-    return categoryMatch && availabilityMatch && searchMatch;
-  }), [availabilityFilter, categoryFilter, products, searchQuery]);
+    return source.filter((product) => {
+      const categoryMatch = posCatalogView === "ampollas"
+        || categoryFilter === "Todos"
+        || product.categoria === categoryFilter;
+      const availabilityMatch =
+        availabilityFilter === "Todos"
+        || (availabilityFilter === "Disponibles" && product.stock > product.stockMinimo)
+        || (availabilityFilter === "Stock bajo" && product.stock > 0 && product.stock <= product.stockMinimo)
+        || (availabilityFilter === "Agotados" && product.stock <= 0);
+      const searchMatch = posCatalogView === "ampollas"
+        ? matchesAmpollaSearch(product, searchQuery)
+        : (!searchQuery
+          || `${product.nombre} ${product.id} ${product.marca} ${product.categoria}`
+            .toLowerCase()
+            .includes(searchQuery));
+
+      return categoryMatch && availabilityMatch && searchMatch;
+    });
+  }, [ampollaProducts, availabilityFilter, catalogProducts, categoryFilter, posCatalogView, products, searchQuery]);
 
   const visibleProducts = useMemo(() => {
-    if (searchQuery) return filteredProducts;
+    if (searchQuery || posCatalogView === "ampollas") return filteredProducts;
     return filteredProducts.slice(0, POS_CATALOG_PREVIEW);
-  }, [filteredProducts, searchQuery]);
+  }, [filteredProducts, posCatalogView, searchQuery]);
 
   const hiddenCatalogCount = searchQuery
     ? 0
     : Math.max(0, filteredProducts.length - visibleProducts.length);
 
-  function getCartQty(productId: string) {
-    return cart.find((item) => item.id === productId)?.cantidad ?? 0;
+  function getCartQty(cartLineId: string) {
+    return cart.find((item) => item.cartLineId === cartLineId)?.cantidad ?? 0;
   }
 
+  const addAmpollaToCart = useCallback((product: Product, tipo: AmpollaVentaTipo) => {
+    const lineId = getAmpollaCartLineId(product.id, tipo);
+    const check = validarStockAmpollaEnCarrito(product, cart, tipo, 1);
+    if (!check.ok) {
+      setNotice(check.error);
+      return false;
+    }
+
+    if (lastReceipt) setLastReceipt(null);
+
+    setCart((prev) => {
+      const found = prev.find((item) => item.cartLineId === lineId);
+      const nextQty = (found?.cantidad ?? 0) + 1;
+      const stockCheck = validarStockAmpollaEnCarrito(product, prev, tipo, nextQty, lineId);
+      if (!stockCheck.ok) {
+        setNotice(stockCheck.error);
+        return prev;
+      }
+
+      const precio = getAmpollaPrice(product, tipo);
+      if (found) {
+        return prev.map((item) => (
+          item.cartLineId === lineId
+            ? { ...item, cantidad: nextQty, precio }
+            : item
+        ));
+      }
+
+      return [...prev, buildAmpollaCartItem(product, tipo, 1, precio)];
+    });
+
+    setAmpollaSaleProduct(null);
+    setNotice(`${product.nombre} (${tipo === "caja" ? "caja" : "unidad"}) agregado al carrito.`);
+    return true;
+  }, [cart, getAmpollaPrice, lastReceipt, setCart, setNotice]);
+
   const addToCart = useCallback((product: Product, options?: { fromScanner?: boolean }) => {
+    if (isAmpolla(product)) {
+      setAmpollaSaleProduct(product);
+      return false;
+    }
+
     if (product.stock <= 0) {
       setNotice("No hay stock disponible para ese producto.");
       return false;
@@ -207,7 +298,8 @@ export function PosPage() {
     }
 
     setCart((prev) => {
-      const found = prev.find((item) => item.id === product.id);
+      const lineId = product.id;
+      const found = prev.find((item) => item.cartLineId === lineId);
 
       if (found && found.cantidad >= product.stock) {
         setNotice(`Solo quedan ${product.stock} unidades disponibles.`);
@@ -216,13 +308,18 @@ export function PosPage() {
 
       if (found) {
         return prev.map((item) => (
-          item.id === product.id
+          item.cartLineId === lineId
             ? { ...item, cantidad: item.cantidad + 1, precio: getSalePrice(product) }
             : item
         ));
       }
 
-      return [...prev, { ...product, precio: getSalePrice(product), cantidad: 1 }];
+      return [...prev, {
+        ...product,
+        cartLineId: lineId,
+        precio: getSalePrice(product),
+        cantidad: 1,
+      }];
     });
 
     if (options?.fromScanner) {
@@ -253,6 +350,13 @@ export function PosPage() {
         precio: "0",
         stock: "1",
       });
+      return;
+    }
+
+    if (isAmpolla(product)) {
+      setAmpollaSaleProduct(product);
+      setSearch("");
+      scanInputRef.current?.focus();
       return;
     }
 
@@ -520,20 +624,46 @@ export function PosPage() {
     }, 80);
   }
 
-  function updateQty(id: string, next: number) {
-    const source = products.find((product) => product.id === id);
+  function updateQty(cartLineId: string, next: number) {
+    const item = cart.find((entry) => entry.cartLineId === cartLineId);
+    if (!item) return;
+
+    const source = products.find((product) => product.id === item.id);
     if (!source) return;
+
+    if (next <= 0) {
+      setCart((prev) => prev.filter((entry) => entry.cartLineId !== cartLineId));
+      return;
+    }
+
+    if (item.ampollaVentaTipo) {
+      const check = validarStockAmpollaEnCarrito(source, cart, item.ampollaVentaTipo, next, cartLineId);
+      if (!check.ok) {
+        setNotice(check.error);
+        return;
+      }
+      setCart((prev) => prev.map((entry) => (
+        entry.cartLineId === cartLineId
+          ? {
+            ...entry,
+            cantidad: next,
+            precio: getAmpollaPrice(source, item.ampollaVentaTipo!),
+          }
+          : entry
+      )));
+      return;
+    }
 
     if (next > source.stock) {
       setNotice(`Solo hay ${source.stock} unidades disponibles para ${source.nombre}.`);
     }
 
     const safeNext = Math.min(next, source.stock);
-    setCart((prev) => prev.flatMap((item) => {
-      if (item.id !== id) return [item];
-      if (safeNext <= 0) return [];
-      return [{ ...source, precio: getSalePrice(source), cantidad: safeNext }];
-    }));
+    setCart((prev) => prev.map((entry) => (
+      entry.cartLineId === cartLineId
+        ? { ...entry, precio: getSalePrice(source), cantidad: safeNext }
+        : entry
+    )));
   }
 
   function clearSale() {
@@ -615,9 +745,15 @@ export function PosPage() {
     };
 
     setProducts((prev) => prev.map((product) => {
-      const inCart = cart.find((item) => item.id === product.id);
-      if (!inCart) return product;
-      return { ...product, stock: Math.max(0, product.stock - inCart.cantidad) };
+      const lines = cart.filter((item) => item.id === product.id);
+      if (!lines.length) return product;
+
+      const unitsToDeduct = lines.reduce(
+        (acc, item) => acc + getUnidadesDescontadasFromCartItem(item, product),
+        0,
+      );
+
+      return { ...product, stock: Math.max(0, product.stock - unitsToDeduct) };
     }));
 
     const listSubtotal = cart.reduce((acc, item) => {
@@ -642,12 +778,21 @@ export function PosPage() {
         ? undefined
         : cart.map((item) => {
             const source = products.find((product) => product.id === item.id);
+            const unidadesDescontadas = source
+              ? getUnidadesDescontadasFromCartItem(item, source)
+              : item.cantidad;
+            const precioLista = source && item.ampollaVentaTipo
+              ? getAmpollaPrecioBase(source, item.ampollaVentaTipo)
+              : (source?.precio ?? item.precio);
+
             return {
               productId: item.id,
               nombre: item.nombre,
               cantidad: item.cantidad,
               precioUnitario: item.precio,
-              precioLista: source?.precio ?? item.precio,
+              precioLista,
+              ampollaVentaTipo: item.ampollaVentaTipo,
+              unidadesDescontadas,
             };
           }),
       pricingMode,
@@ -749,7 +894,25 @@ export function PosPage() {
             )}
           </div>
 
+          <div className="pos-catalog-tabs actions">
+            <button
+              type="button"
+              className={posCatalogView === "catalog" ? "" : "ghost"}
+              onClick={() => setPosCatalogView("catalog")}
+            >
+              Catalogo
+            </button>
+            <button
+              type="button"
+              className={posCatalogView === "ampollas" ? "" : "ghost"}
+              onClick={() => setPosCatalogView("ampollas")}
+            >
+              Ampollas
+            </button>
+          </div>
+
           <div className="pos-toolbar-filters">
+            {posCatalogView === "catalog" && (
             <div className="actions">
               {categories.map((category) => (
                 <button
@@ -761,6 +924,7 @@ export function PosPage() {
                 </button>
               ))}
             </div>
+            )}
 
             <div className="actions">
               {availabilityFilters.map((filter) => (
@@ -777,12 +941,14 @@ export function PosPage() {
 
           <div className="row pos-catalog-meta">
             <span className="muted">
-              {searchQuery
-                ? `Resultados: ${visibleProducts.length} de ${filteredProducts.length}`
-                : hiddenCatalogCount > 0
-                  ? `Vista rapida: ${visibleProducts.length} de ${filteredProducts.length} productos`
-                  : `Mostrando ${visibleProducts.length} productos`}
-              {!searchQuery && hiddenCatalogCount > 0 && " · escribe para buscar mas"}
+              {posCatalogView === "ampollas"
+                ? `Ampollas: ${visibleProducts.length} producto(s)`
+                : searchQuery
+                  ? `Resultados: ${visibleProducts.length} de ${filteredProducts.length}`
+                  : hiddenCatalogCount > 0
+                    ? `Vista rapida: ${visibleProducts.length} de ${filteredProducts.length} productos`
+                    : `Mostrando ${visibleProducts.length} productos`}
+              {posCatalogView === "catalog" && !searchQuery && hiddenCatalogCount > 0 && " · escribe para buscar mas"}
             </span>
             <span className="muted">Modo de precio: {pricingMode === "detalle" ? "Cliente" : wholesaleDiscountPercent ? `Mayorista (${wholesaleDiscountPercent}% desc.)` : "Mayorista"}</span>
           </div>
@@ -791,9 +957,12 @@ export function PosPage() {
         <div className="pos-catalog-results">
           <div className="pos-grid">
           {visibleProducts.map((product) => {
-            const currentQty = getCartQty(product.id);
+            const lineId = isAmpolla(product) ? getAmpollaCartLineId(product.id, "unidad") : product.id;
+            const currentQty = getCartQty(lineId);
             const status = getProductStatus(product);
-            const salePrice = getSalePrice(product);
+            const salePrice = isAmpolla(product)
+              ? (product.precioUnidad ?? product.precio)
+              : getSalePrice(product);
 
             return (
               <article className={`pos-product-card ${product.stock <= 0 ? "is-disabled" : ""}`} key={product.id}>
@@ -803,9 +972,14 @@ export function PosPage() {
                     <span className={`badge ${status.className}`}>{status.label}</span>
                   </div>
                   <p className="muted">{product.marca} · {product.categoria}</p>
-                  <p className="pos-code">Codigo {product.id}</p>
+                  <p className="pos-code">
+                    Codigo {isAmpolla(product) ? (product.codigoBarraCaja ?? product.id) : product.id}
+                  </p>
                   <div className="pos-product-meta">
-                    <span className="badge">Stock {product.stock}</span>
+                    <span className="badge">Stock {product.stock} u.</span>
+                    {isAmpolla(product) && (
+                      <span className="badge">{formatAmpollaStockLabel(product)}</span>
+                    )}
                     <span className="badge">Min. {product.stockMinimo}</span>
                     {currentQty > 0 && <span className="badge success">x{currentQty} en carrito</span>}
                   </div>
@@ -818,22 +992,29 @@ export function PosPage() {
                   <div className="pos-price-block">
                     <strong>{currency(salePrice)}</strong>
                     <span className="muted">
-                      {pricingMode === "detalle"
-                        ? "Precio cliente"
-                        : wholesaleDiscountPercent
-                          ? `Precio con ${wholesaleDiscountPercent}% desc.`
-                          : "Precio mayorista"}
+                      {isAmpolla(product)
+                        ? `Caja ${currency(product.precioCaja ?? 0)}`
+                        : pricingMode === "detalle"
+                          ? "Precio cliente"
+                          : wholesaleDiscountPercent
+                            ? `Precio con ${wholesaleDiscountPercent}% desc.`
+                            : "Precio mayorista"}
                     </span>
                   </div>
                   <div className="actions pos-card-actions">
+                    {!isAmpolla(product) && (
+                      <button
+                        className="ghost"
+                        onClick={() => updateQty(lineId, currentQty - 1)}
+                        disabled={currentQty === 0}
+                      >
+                        -
+                      </button>
+                    )}
                     <button
-                      className="ghost"
-                      onClick={() => updateQty(product.id, currentQty - 1)}
-                      disabled={currentQty === 0}
+                      onClick={() => (isAmpolla(product) ? setAmpollaSaleProduct(product) : addToCart(product))}
+                      disabled={product.stock <= 0}
                     >
-                      -
-                    </button>
-                    <button onClick={() => addToCart(product)} disabled={product.stock <= 0}>
                       <span className="material-symbols-outlined">add_shopping_cart</span>
                     </button>
                   </div>
@@ -947,29 +1128,39 @@ export function PosPage() {
             </div>
           )}
 
-          {cart.map((item) => (
-            <div className="pos-cart-item" key={item.id}>
+          {cart.map((item) => {
+            const source = products.find((product) => product.id === item.id);
+            const stockNote = source && item.ampollaVentaTipo
+              ? getUnidadesDescontadasFromCartItem(item, source)
+              : item.cantidad;
+
+            return (
+            <div className="pos-cart-item" key={item.cartLineId}>
               <div className="row">
                 <div className="pos-item-meta">
                   <strong>{item.nombre}</strong>
                   <span className="muted">{item.id} · {item.marca}</span>
+                  {item.ampollaVentaTipo && (
+                    <span className="muted">Descuento stock: {stockNote} unidad(es)</span>
+                  )}
                 </div>
                 <span className="pos-line-price">{currency(item.precio * item.cantidad)}</span>
               </div>
 
               <div className="row pos-cart-item-bottom">
                 <div className="actions compact">
-                  <button className="ghost" onClick={() => updateQty(item.id, item.cantidad - 1)}>-</button>
+                  <button className="ghost" onClick={() => updateQty(item.cartLineId, item.cantidad - 1)}>-</button>
                   <span className="badge">{item.cantidad}</span>
-                  <button className="ghost" onClick={() => updateQty(item.id, item.cantidad + 1)}>+</button>
-                  <button className="ghost" onClick={() => updateQty(item.id, 0)}>
+                  <button className="ghost" onClick={() => updateQty(item.cartLineId, item.cantidad + 1)}>+</button>
+                  <button className="ghost" onClick={() => updateQty(item.cartLineId, 0)}>
                     <span className="material-symbols-outlined">delete</span>
                   </button>
                 </div>
                 <span className="muted">Unitario {currency(item.precio)}</span>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {lastReceipt && (
             <div className="card pos-success-card">
@@ -1083,6 +1274,17 @@ export function PosPage() {
         </div>
       </aside>
 
+
+      {ampollaSaleProduct && (
+        <AmpollaSaleModal
+          product={ampollaSaleProduct}
+          pricingMode={pricingMode}
+          wholesaleDiscountPercent={wholesaleDiscountPercent}
+          getSalePrice={getAmpollaPrice}
+          onClose={() => setAmpollaSaleProduct(null)}
+          onSelect={(tipo) => addAmpollaToCart(ampollaSaleProduct, tipo)}
+        />
+      )}
 
       {salePickerModal === "customer" && (
         <PosOptionPickerModal

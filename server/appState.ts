@@ -58,6 +58,11 @@ function toIsoTimestampOrNull(value: unknown): string | null {
 }
 
 function rowToProduct(row: Record<string, unknown>): Product {
+  const esAmpolla = row.es_ampolla === true || row.es_ampolla === 1;
+  const unidadesPorCaja = row.unidades_por_caja != null ? Number(row.unidades_por_caja) : 1;
+  const precioCaja = row.precio_caja != null ? Number(row.precio_caja) : undefined;
+  const precioUnidad = row.precio_unidad != null ? Number(row.precio_unidad) : undefined;
+
   return {
     id: String(row.id),
     nombre: String(row.nombre),
@@ -69,6 +74,11 @@ function rowToProduct(row: Record<string, unknown>): Product {
     precioMayorista: Number(row.precio_mayorista),
     stock: Number(row.stock),
     stockMinimo: Number(row.stock_minimo),
+    esAmpolla: esAmpolla || undefined,
+    unidadesPorCaja: esAmpolla ? unidadesPorCaja : undefined,
+    precioCaja: esAmpolla ? precioCaja : undefined,
+    precioUnidad: esAmpolla ? precioUnidad : undefined,
+    codigoBarraCaja: row.codigo_barra_caja ? String(row.codigo_barra_caja) : undefined,
   };
 }
 
@@ -184,8 +194,9 @@ export async function saveAppState(payload: AppStatePayload) {
     for (const product of payload.products) {
       await client.query(`
         INSERT INTO products (
-          id, nombre, marca, descripcion, categoria, costo, precio, precio_mayorista, stock, stock_minimo
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          id, nombre, marca, descripcion, categoria, costo, precio, precio_mayorista, stock, stock_minimo,
+          es_ampolla, unidades_por_caja, precio_caja, precio_unidad, codigo_barra_caja
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       `, [
         product.id,
         product.nombre,
@@ -197,6 +208,11 @@ export async function saveAppState(payload: AppStatePayload) {
         product.precioMayorista,
         product.stock,
         product.stockMinimo,
+        product.esAmpolla === true,
+        product.esAmpolla ? (product.unidadesPorCaja ?? 1) : 1,
+        product.esAmpolla ? (product.precioCaja ?? product.precio) : null,
+        product.esAmpolla ? (product.precioUnidad ?? product.precio) : null,
+        product.esAmpolla ? (product.codigoBarraCaja ?? product.id) : null,
       ]);
     }
 

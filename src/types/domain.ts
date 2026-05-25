@@ -1,3 +1,5 @@
+export type AmpollaVentaTipo = "caja" | "unidad";
+
 export type Product = {
   id: string;
   nombre: string;
@@ -9,9 +11,18 @@ export type Product = {
   precioMayorista: number;
   stock: number;
   stockMinimo: number;
+  esAmpolla?: boolean;
+  unidadesPorCaja?: number;
+  precioCaja?: number;
+  precioUnidad?: number;
+  codigoBarraCaja?: string;
 };
 
-export type CartItem = Product & { cantidad: number };
+export type CartItem = Product & {
+  cantidad: number;
+  cartLineId: string;
+  ampollaVentaTipo?: AmpollaVentaTipo;
+};
 
 export type TransactionItem = {
   productId: string;
@@ -19,6 +30,8 @@ export type TransactionItem = {
   cantidad: number;
   precioUnitario?: number;
   precioLista?: number;
+  ampollaVentaTipo?: AmpollaVentaTipo;
+  unidadesDescontadas?: number;
 };
 
 export type TransactionPricingMode = "detalle" | "mayorista";

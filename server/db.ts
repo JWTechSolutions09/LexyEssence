@@ -81,6 +81,27 @@ async function ensureSchema(activePool: pg.Pool) {
     ADD COLUMN IF NOT EXISTS sale_details_json JSONB
   `);
 
+  await activePool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS es_ampolla BOOLEAN DEFAULT FALSE
+  `);
+  await activePool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS unidades_por_caja INTEGER DEFAULT 1
+  `);
+  await activePool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS precio_caja NUMERIC(10,2)
+  `);
+  await activePool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS precio_unidad NUMERIC(10,2)
+  `);
+  await activePool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS codigo_barra_caja TEXT
+  `);
+
   const count = await activePool.query("SELECT COUNT(*)::int AS count FROM products");
   if ((count.rows[0]?.count as number) > 0) return;
 

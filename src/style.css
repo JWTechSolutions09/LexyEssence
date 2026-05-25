@@ -1483,6 +1483,54 @@ button.danger {
   font-size: 1.05rem;
   font-weight: 700;
 }
+.pos-catalog-tabs {
+  gap: 0.5rem;
+}
+.ampolla-sale-modal {
+  width: min(100%, 480px);
+}
+.ampolla-sale-options {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.ampolla-sale-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  border-radius: 0.7rem;
+  border: 1px solid rgba(170, 106, 145, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+}
+.ampolla-sale-option:hover:not(:disabled) {
+  border-color: rgba(196, 95, 150, 0.55);
+  background: rgba(255, 248, 252, 1);
+}
+.ampolla-sale-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ampolla-sale-option .material-symbols-outlined {
+  color: #9b4d86;
+  font-size: 1.5rem;
+}
+.ampolla-sale-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+}
+.inventory-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 600;
+}
+.inventory-checkbox input {
+  width: 1rem;
+  height: 1rem;
+}
 .pos-cart-title-row {
   align-items: center;
 }

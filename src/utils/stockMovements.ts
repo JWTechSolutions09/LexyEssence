@@ -52,7 +52,7 @@ export function loadStoredStockMovements(): StockMovement[] {
 
 export function movementsFromSale(
   transaction: Transaction,
-  items: { productId: string; nombre: string; cantidad: number }[],
+  items: { productId: string; nombre: string; cantidad: number; unidadesDescontadas?: number }[],
 ): StockMovement[] {
   const fecha = transaction.soldAt ?? new Date().toISOString();
   const motivo = transaction.estado === "Pendiente"
@@ -63,7 +63,7 @@ export function movementsFromSale(
     tipo: "salida",
     productId: item.productId,
     nombre: item.nombre,
-    cantidad: item.cantidad,
+    cantidad: item.unidadesDescontadas ?? item.cantidad,
     motivo,
     fecha,
     referencia: transaction.id,

@@ -4,10 +4,18 @@ import { useAuth } from "../context/AuthContext";
 import { useBarcodeCapture } from "../hooks/useBarcodeCapture";
 import { findProductByCode, normalizeScanCode } from "../hooks/useBarcodeScanner";
 import type { Product } from "../types/domain";
+import {
+  AMPOOLLA_CATEGORY,
+  calcularCajasDisponibles,
+  calcularUnidadesSueltas,
+  formatAmpollaStockLabel,
+  isAmpolla,
+  stockFromCajasIngresadas,
+} from "../utils/ampolla";
 import { currency } from "../utils/format";
 import { createStockMovement } from "../utils/stockMovements";
 
-const baseCategories = ["Cosméticos", "Cuidado de Piel", "Herramientas", "Fragancias", "Accesorios"];
+const baseCategories = ["Cosméticos", "Cuidado de Piel", "Herramientas", "Fragancias", "Accesorios", AMPOOLLA_CATEGORY];
 const stockViews = ["Todos", "Disponibles", "Stock bajo", "Agotados"] as const;
 
 type ProductFormState = {
@@ -21,6 +29,12 @@ type ProductFormState = {
   precioMayorista: string;
   stock: string;
   stockMinimo: string;
+  esAmpolla: string;
+  unidadesPorCaja: string;
+  precioCaja: string;
+  precioUnidad: string;
+  codigoBarraCaja: string;
+  cajasIngresadas: string;
 };
 
 type ProductDraftResult =
@@ -40,6 +54,12 @@ const emptyProductForm: ProductFormState = {
   precioMayorista: "0",
   stock: "0",
   stockMinimo: "0",
+  esAmpolla: "",
+  unidadesPorCaja: "12",
+  precioCaja: "0",
+  precioUnidad: "0",
+  codigoBarraCaja: "",
+  cajasIngresadas: "0",
 };
 
 function readProductFormFromElement(form: HTMLFormElement): ProductFormState {
@@ -57,6 +77,12 @@ function readProductFormFromElement(form: HTMLFormElement): ProductFormState {
     precioMayorista: value("precioMayorista") || "0",
     stock: value("stock") || "0",
     stockMinimo: value("stockMinimo") || "0",
+    esAmpolla: value("esAmpolla"),
+    unidadesPorCaja: value("unidadesPorCaja") || "12",
+    precioCaja: value("precioCaja") || "0",
+    precioUnidad: value("precioUnidad") || "0",
+    codigoBarraCaja: value("codigoBarraCaja"),
+    cajasIngresadas: value("cajasIngresadas") || "0",
   };
 }
 
@@ -73,11 +99,38 @@ function buildProductFromFormState(
   const costo = Number(formState.costo);
   const precio = Number(formState.precio);
   const precioMayorista = Number(formState.precioMayorista);
-  const stock = Number(formState.stock);
+  const stockInput = Number(formState.stock);
   const stockMinimo = Number(formState.stockMinimo);
+  const esAmpolla = formState.esAmpolla === "on" || formState.esAmpolla === "true";
+  const unidadesPorCaja = Number(formState.unidadesPorCaja);
+  const precioCaja = Number(formState.precioCaja);
+  const precioUnidad = Number(formState.precioUnidad);
+  const codigoBarraCaja = (formState.codigoBarraCaja || id).trim().toUpperCase();
+  const cajasIngresadas = Number(formState.cajasIngresadas);
 
   if (!id || !nombre || !marca || !categoria) {
     return { error: "Completa codigo, nombre, marca y categoria." };
+  }
+
+  if (esAmpolla) {
+    if (!codigoBarraCaja) {
+      return { error: "Indica el codigo de barras de la caja." };
+    }
+    if (!Number.isInteger(unidadesPorCaja) || unidadesPorCaja < 1) {
+      return { error: "Unidades por caja debe ser un entero mayor o igual a 1." };
+    }
+    if (!Number.isFinite(precioCaja) || precioCaja < 0) {
+      return { error: "Precio caja invalido." };
+    }
+    if (!Number.isFinite(precioUnidad) || precioUnidad < 0) {
+      return { error: "Precio unidad invalido." };
+    }
+    if (precioCaja < costo) {
+      return { error: "Precio caja no puede ser menor al costo." };
+    }
+    if (precioUnidad < costo) {
+      return { error: "Precio unidad no puede ser menor al costo." };
+    }
   }
 
   if (!Number.isFinite(costo) || costo < 0) {
@@ -92,6 +145,11 @@ function buildProductFromFormState(
     return { error: "El precio mayorista debe ser un numero valido mayor o igual a 0." };
   }
 
+  let stock = stockInput;
+  if (esAmpolla && editingProductId === null && cajasIngresadas > 0) {
+    stock = stockFromCajasIngresadas(cajasIngresadas, unidadesPorCaja) + (Number.isInteger(stockInput) ? stockInput : 0);
+  }
+
   if (!Number.isInteger(stock) || stock < 0) {
     return { error: "El stock debe ser un numero entero mayor o igual a 0." };
   }
@@ -100,39 +158,53 @@ function buildProductFromFormState(
     return { error: "El stock minimo debe ser un numero entero mayor o igual a 0." };
   }
 
-  if (precio < costo) {
+  if (!esAmpolla && precio < costo) {
     return { error: "El precio de venta no puede ser menor al costo." };
   }
 
-  if (precioMayorista < costo) {
+  if (!esAmpolla && precioMayorista < costo) {
     return { error: "El precio mayorista no puede ser menor al costo." };
   }
 
-  if (precioMayorista > precio) {
+  if (!esAmpolla && precioMayorista > precio) {
     return { error: "El precio de venta debe ser mayor o igual al precio mayorista." };
   }
 
+  const resolvedId = esAmpolla ? codigoBarraCaja : id;
+
   const duplicate = products.some((product) => {
     if (editingProductId && product.id === editingProductId) return false;
-    return product.id.toLowerCase() === id.toLowerCase();
+    if (product.id.toLowerCase() === resolvedId.toLowerCase()) return true;
+    if (esAmpolla && product.codigoBarraCaja?.toLowerCase() === codigoBarraCaja.toLowerCase()) return true;
+    return false;
   });
 
   if (duplicate) {
     return { error: "Ya existe un producto con ese codigo." };
   }
 
+  const precioVenta = esAmpolla ? precioUnidad : precio;
+  const precioMayoristaFinal = esAmpolla
+    ? (precioMayorista > 0 ? precioMayorista : Math.round(precioUnidad * 0.85 * 100) / 100)
+    : precioMayorista;
+
   return {
     product: {
-      id,
+      id: resolvedId,
       nombre,
       marca,
       descripcion,
-      categoria,
+      categoria: esAmpolla ? AMPOOLLA_CATEGORY : categoria,
       costo,
-      precio,
-      precioMayorista,
+      precio: precioVenta,
+      precioMayorista: precioMayoristaFinal,
       stock,
       stockMinimo,
+      esAmpolla: esAmpolla || undefined,
+      unidadesPorCaja: esAmpolla ? unidadesPorCaja : undefined,
+      precioCaja: esAmpolla ? precioCaja : undefined,
+      precioUnidad: esAmpolla ? precioUnidad : undefined,
+      codigoBarraCaja: esAmpolla ? codigoBarraCaja : undefined,
     } satisfies Product,
   };
 }
@@ -223,10 +295,16 @@ export function InventoryPage() {
       descripcion: product.descripcion,
       categoria: product.categoria,
       costo: String(product.costo),
-      precio: String(product.precio),
+      precio: String(isAmpolla(product) ? (product.precioUnidad ?? product.precio) : product.precio),
       precioMayorista: String(product.precioMayorista),
       stock: String(product.stock),
       stockMinimo: String(product.stockMinimo),
+      esAmpolla: isAmpolla(product) ? "true" : "",
+      unidadesPorCaja: String(product.unidadesPorCaja ?? 12),
+      precioCaja: String(product.precioCaja ?? 0),
+      precioUnidad: String(product.precioUnidad ?? product.precio),
+      codigoBarraCaja: product.codigoBarraCaja ?? product.id,
+      cajasIngresadas: "0",
     });
     setEditingProductId(product.id);
     setSelectedProduct(product);
@@ -576,10 +654,18 @@ export function InventoryPage() {
 
                 {product.descripcion && <p className="inventory-description">{product.descripcion}</p>}
 
+                {isAmpolla(product) && (
+                  <p className="inventory-description">
+                    <span className="badge">Ampolla</span>
+                    {" "}Caja {currency(product.precioCaja ?? 0)} · Unidad {currency(product.precioUnidad ?? product.precio)}
+                    {" "}· {product.unidadesPorCaja ?? 1} u/caja
+                  </p>
+                )}
+
                 <div className="inventory-meta-grid">
                   <div className="inventory-metric-card highlight">
-                    <span className="muted">Precio venta</span>
-                    <strong>{currency(product.precio)}</strong>
+                    <span className="muted">{isAmpolla(product) ? "Precio unidad" : "Precio venta"}</span>
+                    <strong>{currency(isAmpolla(product) ? (product.precioUnidad ?? product.precio) : product.precio)}</strong>
                   </div>
                   <div className="inventory-metric-card">
                     <span className="muted">Precio mayorista</span>
@@ -592,12 +678,15 @@ export function InventoryPage() {
                     </div>
                   )}
                   <div className="inventory-metric-card stock">
-                    <span className="muted">Stock actual</span>
+                    <span className="muted">Stock unidades</span>
                     <strong>{product.stock}</strong>
                   </div>
                 </div>
 
                 <div className="inventory-details-row">
+                  {isAmpolla(product) && (
+                    <span className="badge success">{formatAmpollaStockLabel(product)}</span>
+                  )}
                   <span className="badge">Minimo {product.stockMinimo}</span>
                   {isAdmin && (
                     <>
@@ -749,6 +838,103 @@ export function InventoryPage() {
                       />
                     </label>
 
+                    <label className="field-span-2 inventory-checkbox">
+                      <input
+                        type="checkbox"
+                        name="esAmpolla"
+                        data-manual-input
+                        checked={draft.esAmpolla === "true"}
+                        onChange={(event) => {
+                          updateDraft("esAmpolla", event.target.checked ? "true" : "");
+                          if (event.target.checked) {
+                            updateDraft("categoria", AMPOOLLA_CATEGORY);
+                          }
+                        }}
+                      />
+                      ¿Es una ampolla?
+                    </label>
+
+                    {draft.esAmpolla === "true" && (
+                      <>
+                        <label>
+                          Codigo barras caja
+                          <input
+                            className="inventory-input"
+                            data-manual-input
+                            name="codigoBarraCaja"
+                            value={draft.codigoBarraCaja || draft.id}
+                            onChange={(event) => {
+                              updateDraft("codigoBarraCaja", event.target.value);
+                              updateDraft("id", event.target.value);
+                            }}
+                            placeholder="Ej. 7894561230001"
+                          />
+                        </label>
+                        <label>
+                          Unidades por caja
+                          <input
+                            className="inventory-input"
+                            data-manual-input
+                            name="unidadesPorCaja"
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={draft.unidadesPorCaja}
+                            onChange={(event) => updateDraft("unidadesPorCaja", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Precio caja
+                          <input
+                            className="inventory-input"
+                            data-manual-input
+                            name="precioCaja"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={draft.precioCaja}
+                            onChange={(event) => updateDraft("precioCaja", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Precio unidad
+                          <input
+                            className="inventory-input"
+                            data-manual-input
+                            name="precioUnidad"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={draft.precioUnidad}
+                            onChange={(event) => updateDraft("precioUnidad", event.target.value)}
+                          />
+                        </label>
+                        {modalMode === "create" && (
+                          <label>
+                            Cajas ingresadas
+                            <input
+                              className="inventory-input"
+                              data-manual-input
+                              name="cajasIngresadas"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={draft.cajasIngresadas}
+                              onChange={(event) => updateDraft("cajasIngresadas", event.target.value)}
+                            />
+                          </label>
+                        )}
+                        <label className="field-span-2">
+                          <span className="muted">
+                            Vista previa: {draft.stock || "0"} u.
+                            {draft.unidadesPorCaja && draft.stock
+                              ? ` · ${calcularCajasDisponibles(Number(draft.stock), Number(draft.unidadesPorCaja))} cajas + ${calcularUnidadesSueltas(Number(draft.stock), Number(draft.unidadesPorCaja))} sueltas`
+                              : ""}
+                          </span>
+                        </label>
+                      </>
+                    )}
+
                     <label>
                       Costo
                       <input
@@ -763,6 +949,7 @@ export function InventoryPage() {
                       />
                     </label>
 
+                    {draft.esAmpolla !== "true" && (
                     <label>
                       Precio de venta
                       <input
@@ -776,6 +963,7 @@ export function InventoryPage() {
                         onChange={(event) => updateDraft("precio", event.target.value)}
                       />
                     </label>
+                    )}
 
                     <label>
                       Precio mayorista
@@ -792,7 +980,7 @@ export function InventoryPage() {
                     </label>
 
                     <label>
-                      Stock inicial
+                      {draft.esAmpolla === "true" ? "Stock en unidades" : "Stock inicial"}
                       <input
                         className="inventory-input"
                         data-manual-input
