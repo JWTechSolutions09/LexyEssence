@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
+import { importStateFromCloud } from "../api/client";
 import { roleLabel, type AuthUser, type UserRole } from "../config/auth";
 import { useAppContext } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
@@ -38,6 +39,7 @@ export function SettingsPage() {
   const [visiblePasswordIds, setVisiblePasswordIds] = useState<Set<string>>(new Set());
   const [showNewUserPassword, setShowNewUserPassword] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [isImportingFromCloud, setIsImportingFromCloud] = useState(false);
 
   const activeUsers = users.filter((entry) => entry.active);
   const inactiveUsers = users.filter((entry) => !entry.active);
@@ -54,6 +56,25 @@ export function SettingsPage() {
     setStoreName("Lexy Essence");
     setCurrencyCode("DOP");
     setNotice("Configuracion restaurada.");
+  }
+
+  async function handleImportFromCloud() {
+    const confirmed = window.confirm(
+      "Se copiara todo el inventario y ventas desde Supabase a SQL Server local. "
+      + "Los datos locales actuales seran reemplazados. ¿Continuar?",
+    );
+    if (!confirmed) return;
+
+    setIsImportingFromCloud(true);
+    try {
+      const result = await importStateFromCloud(true);
+      setNotice(result.message);
+      window.setTimeout(() => window.location.reload(), 800);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "No se pudo importar desde Supabase.");
+    } finally {
+      setIsImportingFromCloud(false);
+    }
   }
 
   function closeUserModal() {
@@ -222,6 +243,23 @@ export function SettingsPage() {
             Usuarios inactivos no pueden iniciar sesion.
           </p>
         )}
+      </section>
+
+      <section className="card settings-form">
+        <h2>Sincronizacion con Supabase</h2>
+        <p className="muted">
+          Usa esto una sola vez para traer el inventario completo de la nube a la base local (LexyLocal).
+          Despues, cada guardado en la tienda actualiza ambas bases automaticamente.
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            onClick={() => void handleImportFromCloud()}
+            disabled={isImportingFromCloud}
+          >
+            {isImportingFromCloud ? "Importando..." : "Importar todo desde Supabase"}
+          </button>
+        </div>
       </section>
 
       <section className="card settings-form">

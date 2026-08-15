@@ -9,8 +9,9 @@ import {
   calcularCajasDisponibles,
   calcularUnidadesSueltas,
   formatAmpollaStockLabel,
+  formatAmpollaStockResumen,
   isAmpolla,
-  stockFromCajasIngresadas,
+  stockFromCajasYSueltas,
 } from "../utils/ampolla";
 import { currency } from "../utils/format";
 import { createStockMovement } from "../utils/stockMovements";
@@ -34,7 +35,8 @@ type ProductFormState = {
   precioCaja: string;
   precioUnidad: string;
   codigoBarraCaja: string;
-  cajasIngresadas: string;
+  stockCajas: string;
+  stockSueltas: string;
 };
 
 type ProductDraftResult =
@@ -59,8 +61,20 @@ const emptyProductForm: ProductFormState = {
   precioCaja: "0",
   precioUnidad: "0",
   codigoBarraCaja: "",
-  cajasIngresadas: "0",
+  stockCajas: "0",
+  stockSueltas: "0",
 };
+
+function syncAmpollaStockFields(form: ProductFormState): ProductFormState {
+  const unidadesPorCaja = Math.max(1, Number(form.unidadesPorCaja) || 12);
+  const stock = stockFromCajasYSueltas(
+    Number(form.stockCajas) || 0,
+    Number(form.stockSueltas) || 0,
+    unidadesPorCaja,
+  );
+
+  return { ...form, stock: String(stock) };
+}
 
 function readProductFormFromElement(form: HTMLFormElement): ProductFormState {
   const data = new FormData(form);
@@ -82,7 +96,8 @@ function readProductFormFromElement(form: HTMLFormElement): ProductFormState {
     precioCaja: value("precioCaja") || "0",
     precioUnidad: value("precioUnidad") || "0",
     codigoBarraCaja: value("codigoBarraCaja"),
-    cajasIngresadas: value("cajasIngresadas") || "0",
+    stockCajas: value("stockCajas") || "0",
+    stockSueltas: value("stockSueltas") || "0",
   };
 }
 
@@ -106,7 +121,8 @@ function buildProductFromFormState(
   const precioCaja = Number(formState.precioCaja);
   const precioUnidad = Number(formState.precioUnidad);
   const codigoBarraCaja = (formState.codigoBarraCaja || id).trim().toUpperCase();
-  const cajasIngresadas = Number(formState.cajasIngresadas);
+  const stockCajas = Number(formState.stockCajas);
+  const stockSueltas = Number(formState.stockSueltas);
 
   if (!id || !nombre || !marca || !categoria) {
     return { error: "Completa codigo, nombre, marca y categoria." };
@@ -125,11 +141,18 @@ function buildProductFromFormState(
     if (!Number.isFinite(precioUnidad) || precioUnidad < 0) {
       return { error: "Precio unidad invalido." };
     }
-    if (precioCaja < costo) {
-      return { error: "Precio caja no puede ser menor al costo." };
+
+    const costoPorCaja = costo;
+    const costoUnitario = costoPorCaja / unidadesPorCaja;
+
+    if (!Number.isFinite(costoPorCaja) || costoPorCaja < 0) {
+      return { error: "Costo por caja invalido." };
     }
-    if (precioUnidad < costo) {
-      return { error: "Precio unidad no puede ser menor al costo." };
+    if (precioUnidad < costoUnitario) {
+      return { error: "Precio unidad no puede ser menor al costo por unidad." };
+    }
+    if (precioCaja < costoPorCaja) {
+      return { error: "Precio caja no puede ser menor al costo de la caja." };
     }
   }
 
@@ -146,8 +169,19 @@ function buildProductFromFormState(
   }
 
   let stock = stockInput;
-  if (esAmpolla && editingProductId === null && cajasIngresadas > 0) {
-    stock = stockFromCajasIngresadas(cajasIngresadas, unidadesPorCaja) + (Number.isInteger(stockInput) ? stockInput : 0);
+  if (esAmpolla) {
+    if (!Number.isInteger(stockCajas) || stockCajas < 0) {
+      return { error: "Las cajas en stock deben ser un entero mayor o igual a 0." };
+    }
+    if (!Number.isInteger(stockSueltas) || stockSueltas < 0) {
+      return { error: "Las unidades sueltas deben ser un entero mayor o igual a 0." };
+    }
+    if (stockSueltas >= unidadesPorCaja) {
+      return {
+        error: `Las unidades sueltas deben ser menor a ${unidadesPorCaja}. Suma una caja completa en lugar de mas unidades sueltas.`,
+      };
+    }
+    stock = stockFromCajasYSueltas(stockCajas, stockSueltas, unidadesPorCaja);
   }
 
   if (!Number.isInteger(stock) || stock < 0) {
@@ -183,6 +217,11 @@ function buildProductFromFormState(
     return { error: "Ya existe un producto con ese codigo." };
   }
 
+  const costoGuardado = esAmpolla
+    ? Math.round((costo / unidadesPorCaja) * 100) / 100
+    : costo;
+  const costoCajaFinal = esAmpolla ? costo : undefined;
+  const costoUnidadFinal = esAmpolla ? costoGuardado : undefined;
   const precioVenta = esAmpolla ? precioUnidad : precio;
   const precioMayoristaFinal = esAmpolla
     ? (precioMayorista > 0 ? precioMayorista : Math.round(precioUnidad * 0.85 * 100) / 100)
@@ -195,7 +234,9 @@ function buildProductFromFormState(
       marca,
       descripcion,
       categoria: esAmpolla ? AMPOOLLA_CATEGORY : categoria,
-      costo,
+      costo: costoGuardado,
+      costoCaja: costoCajaFinal,
+      costoUnidad: costoUnidadFinal,
       precio: precioVenta,
       precioMayorista: precioMayoristaFinal,
       stock,
@@ -278,6 +319,8 @@ export function InventoryPage() {
       ...emptyProductForm,
       id: code.toUpperCase(),
       stock: "1",
+      stockCajas: "0",
+      stockSueltas: "1",
       stockMinimo: "1",
     });
     setEditingProductId(null);
@@ -294,7 +337,11 @@ export function InventoryPage() {
       marca: product.marca,
       descripcion: product.descripcion,
       categoria: product.categoria,
-      costo: String(product.costo),
+      costo: String(
+        isAmpolla(product)
+          ? (product.costoCaja ?? (product.costo * (product.unidadesPorCaja ?? 1)))
+          : product.costo,
+      ),
       precio: String(isAmpolla(product) ? (product.precioUnidad ?? product.precio) : product.precio),
       precioMayorista: String(product.precioMayorista),
       stock: String(product.stock),
@@ -304,7 +351,16 @@ export function InventoryPage() {
       precioCaja: String(product.precioCaja ?? 0),
       precioUnidad: String(product.precioUnidad ?? product.precio),
       codigoBarraCaja: product.codigoBarraCaja ?? product.id,
-      cajasIngresadas: "0",
+      stockCajas: String(
+        isAmpolla(product)
+          ? calcularCajasDisponibles(product.stock, product.unidadesPorCaja ?? 1)
+          : 0,
+      ),
+      stockSueltas: String(
+        isAmpolla(product)
+          ? calcularUnidadesSueltas(product.stock, product.unidadesPorCaja ?? 1)
+          : 0,
+      ),
     });
     setEditingProductId(product.id);
     setSelectedProduct(product);
@@ -329,7 +385,16 @@ export function InventoryPage() {
 
   function updateDraft(field: keyof ProductFormState, value: string) {
     if (formError) setFormError("");
-    setDraft((prev) => ({ ...prev, [field]: value }));
+    setDraft((prev) => {
+      const next = { ...prev, [field]: value };
+      if (
+        next.esAmpolla === "true" &&
+        (field === "stockCajas" || field === "stockSueltas" || field === "unidadesPorCaja")
+      ) {
+        return syncAmpollaStockFields(next);
+      }
+      return next;
+    });
   }
 
   function submitProduct(event: FormEvent<HTMLFormElement>): boolean {
@@ -417,7 +482,7 @@ export function InventoryPage() {
     setProducts((prev) => prev.filter((product) => product.id !== selectedProduct.id));
     setNotice(`Producto ${selectedProduct.nombre} eliminado del inventario.`);
     closeModal();
-    void forceSave();
+    window.setTimeout(() => { void forceSave(); }, 0);
   }
 
   function increaseStock(id: string) {
@@ -673,13 +738,30 @@ export function InventoryPage() {
                   </div>
                   {isAdmin && (
                     <div className="inventory-metric-card">
-                      <span className="muted">Costo</span>
-                      <strong>{currency(product.costo)}</strong>
+                      <span className="muted">{isAmpolla(product) ? "Costo unidad" : "Costo"}</span>
+                      <strong>{currency(isAmpolla(product) ? (product.costoUnidad ?? product.costo) : product.costo)}</strong>
+                    </div>
+                  )}
+                  {isAdmin && isAmpolla(product) && (
+                    <div className="inventory-metric-card">
+                      <span className="muted">Costo caja</span>
+                      <strong>{currency(product.costoCaja ?? ((product.costoUnidad ?? product.costo) * (product.unidadesPorCaja ?? 1)))}</strong>
                     </div>
                   )}
                   <div className="inventory-metric-card stock">
-                    <span className="muted">Stock unidades</span>
-                    <strong>{product.stock}</strong>
+                    <span className="muted">{isAmpolla(product) ? "Stock" : "Stock unidades"}</span>
+                    {isAmpolla(product) ? (
+                      <>
+                        <strong>
+                          {calcularCajasDisponibles(product.stock, product.unidadesPorCaja ?? 1)} cajas
+                          {" + "}
+                          {calcularUnidadesSueltas(product.stock, product.unidadesPorCaja ?? 1)} sueltas
+                        </strong>
+                        <span className="muted">{product.stock} u. en total</span>
+                      </>
+                    ) : (
+                      <strong>{product.stock}</strong>
+                    )}
                   </div>
                 </div>
 
@@ -845,10 +927,24 @@ export function InventoryPage() {
                         data-manual-input
                         checked={draft.esAmpolla === "true"}
                         onChange={(event) => {
-                          updateDraft("esAmpolla", event.target.checked ? "true" : "");
-                          if (event.target.checked) {
-                            updateDraft("categoria", AMPOOLLA_CATEGORY);
-                          }
+                          const checked = event.target.checked;
+                          setDraft((prev) => {
+                            const next: ProductFormState = {
+                              ...prev,
+                              esAmpolla: checked ? "true" : "",
+                              categoria: checked ? AMPOOLLA_CATEGORY : prev.categoria,
+                            };
+                            if (!checked) return next;
+
+                            const upc = Math.max(1, Number(next.unidadesPorCaja) || 12);
+                            const total = Math.max(0, Number(next.stock) || 0);
+                            return syncAmpollaStockFields({
+                              ...next,
+                              stockCajas: String(calcularCajasDisponibles(total, upc)),
+                              stockSueltas: String(calcularUnidadesSueltas(total, upc)),
+                            });
+                          });
+                          if (formError) setFormError("");
                         }}
                       />
                       ¿Es una ampolla?
@@ -909,34 +1005,60 @@ export function InventoryPage() {
                             onChange={(event) => updateDraft("precioUnidad", event.target.value)}
                           />
                         </label>
-                        {modalMode === "create" && (
-                          <label>
-                            Cajas ingresadas
-                            <input
-                              className="inventory-input"
-                              data-manual-input
-                              name="cajasIngresadas"
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={draft.cajasIngresadas}
-                              onChange={(event) => updateDraft("cajasIngresadas", event.target.value)}
-                            />
-                          </label>
-                        )}
-                        <label className="field-span-2">
-                          <span className="muted">
-                            Vista previa: {draft.stock || "0"} u.
-                            {draft.unidadesPorCaja && draft.stock
-                              ? ` · ${calcularCajasDisponibles(Number(draft.stock), Number(draft.unidadesPorCaja))} cajas + ${calcularUnidadesSueltas(Number(draft.stock), Number(draft.unidadesPorCaja))} sueltas`
-                              : ""}
-                          </span>
-                        </label>
+                        <div className="field-span-2 ampolla-stock-panel">
+                          <p className="ampolla-stock-panel-title">Inventario en almacen</p>
+                          <p className="muted ampolla-stock-hint">
+                            Cada caja trae {draft.unidadesPorCaja || "—"} unidades.
+                            {" "}Indica cuantas cajas selladas tienes y cuantas ampollas sueltas (fuera de caja).
+                          </p>
+                          <div className="ampolla-stock-inputs">
+                            <label>
+                              Cajas completas
+                              <input
+                                className="inventory-input"
+                                data-manual-input
+                                name="stockCajas"
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={draft.stockCajas}
+                                onChange={(event) => updateDraft("stockCajas", event.target.value)}
+                              />
+                            </label>
+                            <label>
+                              Unidades sueltas
+                              <input
+                                className="inventory-input"
+                                data-manual-input
+                                name="stockSueltas"
+                                type="number"
+                                min="0"
+                                max={Math.max(0, Number(draft.unidadesPorCaja) - 1) || undefined}
+                                step="1"
+                                value={draft.stockSueltas}
+                                onChange={(event) => updateDraft("stockSueltas", event.target.value)}
+                              />
+                              <span className="muted">
+                                Ampollas sueltas (max. {Math.max(0, Number(draft.unidadesPorCaja || 12) - 1)} por caja)
+                              </span>
+                            </label>
+                          </div>
+                          <input type="hidden" name="stock" value={draft.stock} />
+                          <div className="ampolla-stock-summary" aria-live="polite">
+                            <span className="muted">Total en inventario</span>
+                            <strong>
+                              {formatAmpollaStockResumen(
+                                Number(draft.stock) || 0,
+                                Number(draft.unidadesPorCaja) || 12,
+                              )}
+                            </strong>
+                          </div>
+                        </div>
                       </>
                     )}
 
                     <label>
-                      Costo
+                      {draft.esAmpolla === "true" ? "Costo por caja" : "Costo"}
                       <input
                         className="inventory-input"
                         data-manual-input
@@ -947,6 +1069,11 @@ export function InventoryPage() {
                         value={draft.costo}
                         onChange={(event) => updateDraft("costo", event.target.value)}
                       />
+                      {draft.esAmpolla === "true" && draft.costo && draft.unidadesPorCaja && (
+                        <span className="muted">
+                          Costo por unidad: {currency(Number(draft.costo) / Number(draft.unidadesPorCaja))}
+                        </span>
+                      )}
                     </label>
 
                     {draft.esAmpolla !== "true" && (
@@ -965,6 +1092,7 @@ export function InventoryPage() {
                     </label>
                     )}
 
+                    {draft.esAmpolla !== "true" && (
                     <label>
                       Precio mayorista
                       <input
@@ -978,9 +1106,11 @@ export function InventoryPage() {
                         onChange={(event) => updateDraft("precioMayorista", event.target.value)}
                       />
                     </label>
+                    )}
 
+                    {draft.esAmpolla !== "true" && (
                     <label>
-                      {draft.esAmpolla === "true" ? "Stock en unidades" : "Stock inicial"}
+                      Stock inicial
                       <input
                         className="inventory-input"
                         data-manual-input
@@ -992,6 +1122,7 @@ export function InventoryPage() {
                         onChange={(event) => updateDraft("stock", event.target.value)}
                       />
                     </label>
+                    )}
 
                     <label>
                       Stock minimo

@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import type { AuthUser, UserRole } from "../src/config/auth.js";
-import { getPool } from "./db.js";
+import { getPrimaryBackend } from "./db.js";
 
 const JWT_SECRET = process.env.LEXY_JWT_SECRET ?? "lexy-essence-dev-secret-change-in-production";
 const TOKEN_TTL = "7d";
@@ -61,10 +61,10 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
 }
 
 export async function loginUser(username: string, password: string) {
-  const result = await getPool().query(`
+  const result = await getPrimaryBackend().query(`
     SELECT * FROM users
-    WHERE username = $1 AND active = TRUE
-  `, [username.trim()]);
+    WHERE username = $1 AND active = $2
+  `, [username.trim(), true]);
 
   const row = result.rows[0] as Record<string, unknown> | undefined;
   if (!row) return null;
@@ -88,7 +88,7 @@ export async function loginUser(username: string, password: string) {
 }
 
 export async function listUsers() {
-  const result = await getPool().query("SELECT * FROM users ORDER BY display_name");
+  const result = await getPrimaryBackend().query("SELECT * FROM users ORDER BY display_name");
   return result.rows.map((row) => rowToAuthUser(row as Record<string, unknown>));
 }
 
@@ -102,15 +102,15 @@ export async function createUser(input: {
   const displayName = input.displayName.trim();
   const password = input.password.trim();
 
-  const exists = await getPool().query("SELECT id FROM users WHERE username = $1", [username]);
+  const exists = await getPrimaryBackend().query("SELECT id FROM users WHERE username = $1", [username]);
   if (exists.rowCount && exists.rowCount > 0) {
     return { ok: false as const, error: "Ese nombre de usuario ya existe." };
   }
 
   const id = `user-${Date.now()}`;
-  await getPool().query(`
+  await getPrimaryBackend().query(`
     INSERT INTO users (id, username, password, password_hash, display_name, role, active)
-    VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
   `, [
     id,
     username,
@@ -118,9 +118,10 @@ export async function createUser(input: {
     bcrypt.hashSync(password, 10),
     displayName,
     input.role,
+    true,
   ]);
 
-  const created = await getPool().query("SELECT * FROM users WHERE id = $1", [id]);
+  const created = await getPrimaryBackend().query("SELECT * FROM users WHERE id = $1", [id]);
   return {
     ok: true as const,
     user: rowToAuthUser(created.rows[0] as Record<string, unknown>),
@@ -133,7 +134,7 @@ export async function updateUserPassword(userId: string, password: string) {
     return { ok: false as const, error: "La contrasena no puede estar vacia." };
   }
 
-  const result = await getPool().query(`
+  const result = await getPrimaryBackend().query(`
     UPDATE users SET password = $1, password_hash = $2 WHERE id = $3
   `, [nextPassword, bcrypt.hashSync(nextPassword, 10), userId]);
 
@@ -153,26 +154,26 @@ export async function updateUserDetails(
     return { ok: false as const, error: "El nombre es obligatorio." };
   }
 
-  const targetResult = await getPool().query("SELECT * FROM users WHERE id = $1", [userId]);
+  const targetResult = await getPrimaryBackend().query("SELECT * FROM users WHERE id = $1", [userId]);
   const target = targetResult.rows[0] as Record<string, unknown> | undefined;
   if (!target) {
     return { ok: false as const, error: "Usuario no encontrado." };
   }
 
   if (!input.active && target.role === "admin") {
-    const adminCount = await getPool().query(`
-      SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND active = TRUE
-    `);
+    const adminCount = await getPrimaryBackend().query(`
+      SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND active = $1
+    `, [true]);
     if ((adminCount.rows[0]?.count as number) <= 1) {
       return { ok: false as const, error: "Debe quedar al menos un administrador activo." };
     }
   }
 
-  await getPool().query(`
+  await getPrimaryBackend().query(`
     UPDATE users SET display_name = $1, role = $2, active = $3 WHERE id = $4
   `, [displayName, input.role, input.active, userId]);
 
-  const updated = await getPool().query("SELECT * FROM users WHERE id = $1", [userId]);
+  const updated = await getPrimaryBackend().query("SELECT * FROM users WHERE id = $1", [userId]);
   return {
     ok: true as const,
     user: rowToAuthUser(updated.rows[0] as Record<string, unknown>),

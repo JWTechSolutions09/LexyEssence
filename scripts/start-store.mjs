@@ -1,9 +1,11 @@
 import { spawn, execSync } from "node:child_process";
+import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+dotenv.config({ path: path.join(rootDir, ".env") });
 const distIndex = path.join(rootDir, "dist", "index.html");
 
 process.chdir(rootDir);

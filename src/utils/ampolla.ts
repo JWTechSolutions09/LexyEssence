@@ -18,20 +18,44 @@ export function calcularUnidadesSueltas(stockUnidades: number, unidadesPorCaja: 
   return stockUnidades % unidadesPorCaja;
 }
 
+export function stockFromCajasYSueltas(
+  cajas: number,
+  unidadesSueltas: number,
+  unidadesPorCaja: number,
+): number {
+  const upc = Math.max(1, Math.floor(unidadesPorCaja));
+  const c = Math.max(0, Math.floor(cajas));
+  const s = Math.max(0, Math.floor(unidadesSueltas));
+  return c * upc + s;
+}
+
+export function formatAmpollaStockResumen(stockUnidades: number, unidadesPorCaja: number): string {
+  const upc = Math.max(1, Math.floor(unidadesPorCaja));
+  const total = Math.max(0, Math.floor(stockUnidades));
+  const cajas = calcularCajasDisponibles(total, upc);
+  const sueltas = calcularUnidadesSueltas(total, upc);
+
+  if (total === 0) {
+    return "Sin stock";
+  }
+
+  const partes: string[] = [];
+  if (cajas > 0) {
+    partes.push(`${cajas} ${cajas === 1 ? "caja" : "cajas"} (${cajas * upc} u.)`);
+  }
+  if (sueltas > 0) {
+    partes.push(`${sueltas} ${sueltas === 1 ? "unidad suelta" : "unidades sueltas"}`);
+  }
+
+  return `${partes.join(" + ")} = ${total} unidades en total`;
+}
+
 export function formatAmpollaStockLabel(product: Product): string {
   if (!isAmpolla(product)) {
     return `${product.stock} unidades`;
   }
 
-  const unidadesPorCaja = Math.max(1, product.unidadesPorCaja ?? 1);
-  const cajas = calcularCajasDisponibles(product.stock, unidadesPorCaja);
-  const sueltas = calcularUnidadesSueltas(product.stock, unidadesPorCaja);
-
-  if (sueltas > 0) {
-    return `${product.stock} unidades · ${cajas} caja(s) + ${sueltas} suelta(s)`;
-  }
-
-  return `${product.stock} unidades · ${cajas} caja(s) completas`;
+  return formatAmpollaStockResumen(product.stock, product.unidadesPorCaja ?? 1);
 }
 
 export function getAmpollaCartLineId(productId: string, tipo: AmpollaVentaTipo): string {

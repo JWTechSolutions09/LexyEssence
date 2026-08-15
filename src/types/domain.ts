@@ -7,6 +7,8 @@ export type Product = {
   descripcion: string;
   categoria: string;
   costo: number;
+  costoCaja?: number;
+  costoUnidad?: number;
   precio: number;
   precioMayorista: number;
   stock: number;

@@ -16,7 +16,25 @@ import {
   updateUserPassword,
   type AuthenticatedRequest,
 } from "./auth.js";
-import { getDatabaseLabel, initDatabase, isDatabaseReady, pingDatabase, resetDatabase, setDatabaseReconnectHandler } from "./db.js";
+import {
+  getConnectingMessage,
+  getCloudBackend,
+  getDatabaseLabel,
+  getDatabaseModeLabel,
+  initDatabase,
+  isCloudDatabaseReady,
+  isDatabaseReady,
+  pingDatabase,
+  importCloudStateToLocal,
+  pushLocalStateToCloud,
+  reconnectCloudDatabase,
+  resetDatabase,
+  setDatabaseReconnectHandler,
+  startBackgroundCloudSync,
+  syncDualDatabases,
+  syncUsersFromCloudToLocal,
+} from "./db.js";
+import { isDualDatabaseMode } from "./database/config.js";
 
 dotenv.config();
 
@@ -32,7 +50,7 @@ app.use(express.json({ limit: "10mb" }));
 
 function requireDatabase(_req: Request, res: Response, next: NextFunction) {
   if (!isDatabaseReady()) {
-    res.status(503).json({ error: "Conectando con Supabase. Intenta en unos segundos." });
+    res.status(503).json({ error: `${getConnectingMessage()} Intenta en unos segundos.` });
     return;
   }
   next();
@@ -40,17 +58,130 @@ function requireDatabase(_req: Request, res: Response, next: NextFunction) {
 
 app.get("/api/health", async (_req, res) => {
   if (!isDatabaseReady()) {
-    res.status(503).json({ ok: false, error: "Conectando con Supabase..." });
+    res.status(503).json({ ok: false, error: getConnectingMessage() });
     return;
   }
 
   try {
     const now = await pingDatabase();
-    res.json({ ok: true, database: getDatabaseLabel(), time: now });
+    const cloud = getCloudBackend();
+    let cloudTime: string | null = null;
+
+    if (cloud) {
+      try {
+        cloudTime = await cloud.ping();
+      } catch {
+        cloudTime = null;
+      }
+    }
+
+    res.json({
+      ok: true,
+      mode: getDatabaseModeLabel(),
+      database: getDatabaseLabel(),
+      time: now,
+      cloud: cloud
+        ? {
+            label: cloud.label,
+            ok: isCloudDatabaseReady() && cloudTime != null,
+            time: cloudTime,
+          }
+        : null,
+    });
   } catch (error) {
     res.status(503).json({
       ok: false,
       error: error instanceof Error ? error.message : "Error de base de datos.",
+    });
+  }
+});
+
+app.post("/api/sync/users", requireAuth, requireAdmin, requireDatabase, async (_req, res) => {
+  if (!isDualDatabaseMode()) {
+    res.status(400).json({ error: "Solo aplica en modo dual." });
+    return;
+  }
+
+  try {
+    const count = await syncUsersFromCloudToLocal(true);
+    res.json({
+      ok: true,
+      users: count,
+      message: count > 0
+        ? `${count} usuario(s) sincronizados desde Supabase.`
+        : "No hay usuarios en Supabase para copiar.",
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Error al sincronizar usuarios.",
+    });
+  }
+});
+
+app.post("/api/sync/run", requireAuth, requireDatabase, async (_req, res) => {
+  if (!isDualDatabaseMode()) {
+    res.json({ ok: true, cloudSynced: true, merged: false, state: await loadAppState() });
+    return;
+  }
+
+  try {
+    const result = await syncDualDatabases();
+    const state = result.state ?? await loadAppState();
+    res.json({ ok: true, ...result, state });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Error al sincronizar.",
+    });
+  }
+});
+
+app.post("/api/sync/from-cloud", requireAuth, requireAdmin, requireDatabase, async (req, res) => {
+  if (!isDualDatabaseMode()) {
+    res.status(400).json({ error: "La importacion desde la nube solo aplica en modo dual." });
+    return;
+  }
+
+  if (!isCloudDatabaseReady()) {
+    res.status(503).json({ error: "Supabase no esta conectado. Verifica internet y DATABASE_URL." });
+    return;
+  }
+
+  const force = req.body?.force === true || req.query.force === "1";
+
+  try {
+    const result = await importCloudStateToLocal(force);
+    if (!result.imported) {
+      res.status(409).json(result);
+      return;
+    }
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Error al importar desde Supabase.",
+    });
+  }
+});
+
+app.post("/api/sync/cloud", requireAuth, requireDatabase, async (_req, res) => {
+  if (!isDualDatabaseMode()) {
+    res.status(400).json({ error: "La sincronizacion manual solo aplica en modo dual." });
+    return;
+  }
+
+  try {
+    const result = await pushLocalStateToCloud();
+    if (!result.cloudSynced) {
+      res.status(503).json({
+        ok: false,
+        cloudSynced: false,
+        error: result.cloudError ?? "No se pudo sincronizar con Supabase.",
+      });
+      return;
+    }
+    res.json({ ok: true, cloudSynced: true });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Error al sincronizar con la nube.",
     });
   }
 });
@@ -166,7 +297,7 @@ app.put("/api/app-state", requireAuth, requireDatabase, async (req, res) => {
   }
 
   try {
-    await saveAppState({
+    const saveResult = await saveAppState({
       products: payload.products,
       transactions: payload.transactions ?? [],
       appointments: payload.appointments ?? [],
@@ -176,7 +307,15 @@ app.put("/api/app-state", requireAuth, requireDatabase, async (req, res) => {
       wholesaleClients: payload.wholesaleClients ?? [],
     });
     console.log(`[save] ${payload.products.length} producto(s) guardado(s) en ${getDatabaseLabel()}`);
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      mode: getDatabaseModeLabel(),
+      cloudSynced: saveResult.cloudSynced,
+      cloudError: saveResult.cloudError,
+      merged: saveResult.merged,
+      addedFromCloud: saveResult.addedFromCloud,
+      state: saveResult.state,
+    });
   } catch (error) {
     console.error("[save] error:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Error al guardar datos." });
@@ -247,15 +386,24 @@ async function connectDatabase() {
   if (connecting) return;
   connecting = true;
 
-  console.log("Conectando con Supabase...");
+  console.log(getConnectingMessage());
   try {
     const now = await initDatabase();
-    console.log(`Base de datos: ${getDatabaseLabel()}`);
+    console.log(`Base de datos local: ${getDatabaseLabel()}`);
+    console.log(`Modo: ${getDatabaseModeLabel()}`);
     console.log(`Conexion verificada: ${now}`);
+    if (isDualDatabaseMode()) {
+      const cloud = getCloudBackend();
+      console.log(cloud?.ready
+        ? `[cloud] ${cloud.label} lista para sincronizar.`
+        : "[cloud] Supabase pendiente; la tienda sigue con SQL Server local.");
+      startBackgroundCloudSync();
+      console.log("[sync] Sincronizacion bidireccional en segundo plano activa (cada 12s).");
+    }
   } catch (error) {
     await resetDatabase();
     const message = error instanceof Error ? error.message : String(error);
-    console.error("No se pudo conectar a Supabase:", message);
+    console.error("No se pudo conectar a la base de datos:", message);
     console.log(`Reintentando conexion en ${DB_RETRY_MS / 1000}s...`);
     setTimeout(connectDatabase, DB_RETRY_MS);
   } finally {
@@ -265,8 +413,13 @@ async function connectDatabase() {
 
 function startServer() {
   setDatabaseReconnectHandler(() => {
-    console.log("[db] Reconectando con Supabase...");
-    setTimeout(connectDatabase, 2000);
+    console.log("[db] Reconectando servicios de base de datos...");
+    setTimeout(async () => {
+      await reconnectCloudDatabase();
+      if (!isDatabaseReady()) {
+        await connectDatabase();
+      }
+    }, 2000);
   });
 
   app.listen(PORT, HOST, () => {

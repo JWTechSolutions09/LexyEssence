@@ -364,6 +364,105 @@ button.danger {
   font-weight: 700;
 }
 
+.nav-sync-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.nav-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+button.nav-sync-pill {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.nav-sync-pill:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.nav-sync-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nav-sync-dot-spin {
+  animation: save-spin 0.9s linear infinite;
+}
+
+.nav-sync-pill-local {
+  background: rgba(72, 160, 110, 0.22);
+  color: #c8f0d8;
+  border-color: rgba(72, 160, 110, 0.35);
+}
+
+.nav-sync-pill-local .nav-sync-dot {
+  background: #5fd68a;
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-ok {
+  background: rgba(72, 140, 200, 0.22);
+  color: #d4e8ff;
+  border-color: rgba(72, 140, 200, 0.35);
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-ok .nav-sync-dot {
+  background: #7eb8ff;
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-syncing,
+.nav-sync-pill-cloud.nav-sync-pill-pending {
+  background: rgba(200, 150, 50, 0.2);
+  color: #ffe8b8;
+  border-color: rgba(200, 150, 50, 0.35);
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-syncing .nav-sync-dot,
+.nav-sync-pill-cloud.nav-sync-pill-pending .nav-sync-dot {
+  background: #f0c060;
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-error {
+  background: rgba(200, 70, 80, 0.22);
+  color: #ffd0d4;
+  border-color: rgba(200, 70, 80, 0.4);
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-error .nav-sync-dot {
+  background: #ff8a94;
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-offline {
+  background: rgba(140, 140, 150, 0.2);
+  color: #e0e0e8;
+  border-color: rgba(140, 140, 150, 0.3);
+}
+
+.nav-sync-pill-cloud.nav-sync-pill-offline .nav-sync-dot {
+  background: #a8a8b8;
+}
+
+@media (max-width: 900px) {
+  .nav-sync-status {
+    display: none;
+  }
+}
+
 .save-status-banner {
   position: sticky;
   top: 88px;
@@ -1530,6 +1629,45 @@ button.danger {
 .inventory-checkbox input {
   width: 1rem;
   height: 1rem;
+}
+.ampolla-stock-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(170, 106, 145, 0.22);
+  background: rgba(255, 248, 252, 0.9);
+}
+.ampolla-stock-panel-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text, #3d2438);
+}
+.ampolla-stock-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.ampolla-stock-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.ampolla-stock-summary {
+  display: grid;
+  gap: 0.2rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed rgba(170, 106, 145, 0.25);
+}
+.ampolla-stock-summary strong {
+  font-size: 0.95rem;
+  color: var(--text, #3d2438);
+}
+@media (max-width: 520px) {
+  .ampolla-stock-inputs {
+    grid-template-columns: 1fr;
+  }
 }
 .pos-cart-title-row {
   align-items: center;

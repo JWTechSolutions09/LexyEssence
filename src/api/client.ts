@@ -126,10 +126,52 @@ export async function fetchAppState() {
   return apiFetch<AppStatePayload>("/api/app-state");
 }
 
+export type SaveAppStateResponse = {
+  ok: true;
+  mode?: string;
+  cloudSynced?: boolean;
+  cloudError?: string;
+  merged?: boolean;
+  state?: AppStatePayload;
+  addedFromCloud?: {
+    products: number;
+    transactions: number;
+    appointments: number;
+    stockMovements: number;
+    wholesaleClients: number;
+  };
+};
+
+export async function runBackgroundSync() {
+  return apiFetch<SaveAppStateResponse & { ok: true }>("/api/sync/run", {
+    method: "POST",
+  });
+}
+
 export async function saveAppState(payload: AppStatePayload) {
-  return apiFetch<{ ok: true }>("/api/app-state", {
+  return apiFetch<SaveAppStateResponse>("/api/app-state", {
     method: "PUT",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function syncCloudState() {
+  return apiFetch<{ ok: true; cloudSynced: boolean }>("/api/sync/cloud", {
+    method: "POST",
+  });
+}
+
+export async function importStateFromCloud(force = false) {
+  return apiFetch<{
+    ok?: true;
+    imported: boolean;
+    products: number;
+    transactions: number;
+    users: number;
+    message: string;
+  }>(`/api/sync/from-cloud${force ? "?force=1" : ""}`, {
+    method: "POST",
+    body: force ? JSON.stringify({ force: true }) : undefined,
   });
 }
 

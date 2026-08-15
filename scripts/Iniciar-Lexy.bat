@@ -10,8 +10,9 @@ if errorlevel 1 (
 )
 
 if not exist ".env" (
-  echo Falta el archivo .env con DATABASE_URL y LEXY_JWT_SECRET.
-  echo Copia .env.example a .env y completa tus datos de Supabase.
+  echo Falta el archivo .env con DATABASE_MODE, DATABASE_URL y LEXY_JWT_SECRET.
+  echo Copia .env.example a .env
+  echo Modo tienda recomendado: DATABASE_MODE=dual + SQL Server LexyLocal.
   pause
   exit /b 1
 )

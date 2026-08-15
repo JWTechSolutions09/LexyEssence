@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { SaveErrorOverlay } from "./SaveErrorOverlay";
-import { SaveStatusBanner } from "./SaveStatusBanner";
+import { NavSyncStatus } from "./NavSyncStatus";
 import { AppDataGate } from "./AppDataGate";
 import { useAppContext } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
@@ -26,7 +26,7 @@ export function Layout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { setNotice, isAppSaving, appSaveError, isOfflineMode } = useAppContext();
+  const { setNotice } = useAppContext();
   const { user, isAdmin, logout } = useAuth();
 
   const navItems = isAdmin ? adminNavItems : cajaNavItems;
@@ -69,19 +69,8 @@ export function Layout() {
               <input placeholder="Buscar productos o servicios..." />
             </div>
           )}
-          <span className="topbar-user muted">
-            {user?.displayName}
-            {isAppSaving && <span className="db-saving-badge"> · Guardando...</span>}
-            {isOfflineMode && navigator.onLine === false && (
-              <span className="db-offline-badge"> · Sin internet</span>
-            )}
-            {isOfflineMode && navigator.onLine && (
-              <span className="db-offline-badge"> · Sin conexion a Supabase</span>
-            )}
-            {appSaveError && !isOfflineMode && (
-              <span className="db-error-badge"> · Sin guardar en nube</span>
-            )}
-          </span>
+          <NavSyncStatus />
+          <span className="topbar-user muted">{user?.displayName}</span>
           {isAdmin && (
             <>
               <button
@@ -124,8 +113,7 @@ export function Layout() {
         </button>
       </aside>
       {mobileMenuOpen ? <button className="mobile-backdrop" onClick={() => setMobileMenuOpen(false)} aria-label="Cerrar menu" /> : null}
-      <main className={`content ${appSaveError && !isOfflineMode ? "content-save-blocked" : ""}`}>
-        <SaveStatusBanner />
+      <main className="content">
         <SaveErrorOverlay />
         <AppDataGate>
           <Outlet />

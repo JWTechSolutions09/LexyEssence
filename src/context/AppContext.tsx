@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
-  checkApiReachable,
   clearOfflinePendingSync,
+  fetchApiHealth,
   isNetworkFailure,
   isRecoverableLoadFailure,
   loadOfflineSnapshot,
@@ -12,6 +12,7 @@ import {
   ApiError,
   fetchAppState,
   migrateAppState,
+  runBackgroundSync,
   saveAppState,
   type AppStatePayload,
 } from "../api/client";
@@ -158,6 +159,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const localTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef(false);
+  const saveGenerationRef = useRef(0);
   const latestPayloadRef = useRef<AppStatePayload>({
     products: initialProducts,
     transactions: initialTransactions,
@@ -178,7 +180,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     wholesaleClients,
   }), [products, transactions, appointments, stockMovements, currentCashSession, cashSessionHistory, wholesaleClients]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestPayloadRef.current = buildPayload();
   }, [buildPayload]);
 
@@ -187,23 +189,74 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPendingCloudSync(cloudPending);
   }, []);
 
-  const performSave = useCallback(async (attempt = 0): Promise<boolean> => {
-    const payload = normalizePayload(latestPayloadRef.current);
+  const applyInboundSync = useCallback((state: AppStatePayload) => {
+    const normalizedState = normalizePayload(state);
+    setTransactions(normalizedState.transactions);
+    setAppointments(normalizedState.appointments);
+    setStockMovements(normalizedState.stockMovements);
+    setCurrentCashSession(normalizedState.currentCashSession);
+    setCashSessionHistory(normalizedState.cashSessionHistory);
+    setWholesaleClients(normalizedState.wholesaleClients ?? []);
+    setCashierOpen(Boolean(normalizedState.currentCashSession));
+    latestPayloadRef.current = {
+      ...latestPayloadRef.current,
+      transactions: normalizedState.transactions,
+      appointments: normalizedState.appointments,
+      stockMovements: normalizedState.stockMovements,
+      currentCashSession: normalizedState.currentCashSession,
+      cashSessionHistory: normalizedState.cashSessionHistory,
+      wholesaleClients: normalizedState.wholesaleClients ?? [],
+    };
+  }, []);
+
+  const performSave = useCallback(async (attempt = 0, payloadOverride?: AppStatePayload): Promise<boolean> => {
+    const generation = ++saveGenerationRef.current;
+    const payload = normalizePayload(payloadOverride ?? latestPayloadRef.current);
 
     try {
-      await saveOfflineSnapshot(payload, true);
+      await saveOfflineSnapshot(payload, false);
     } catch {
       setAppSaveError("No se pudo guardar una copia local de seguridad.");
       return false;
     }
 
     try {
-      await saveAppState(payload);
-      await clearOfflinePendingSync(payload);
+      const saveResult = await saveAppState(payload);
+      if (generation !== saveGenerationRef.current) {
+        return true;
+      }
+
       setAppSaveError(null);
       setSaveRetryCount(0);
       setIsOfflineMode(false);
+
+      if (saveResult.state && saveResult.merged) {
+        applyInboundSync(saveResult.state);
+      }
+
+      if (saveResult.cloudSynced === false) {
+        await saveOfflineSnapshot(saveResult.state ?? payload, true);
+        setPendingCloudSync(true);
+        const health = await fetchApiHealth();
+        if (health?.cloudOk) {
+          setNotice("Guardado en SQL Server. Sincronizando con Supabase en segundo plano...");
+        } else {
+          setNotice("Guardado en SQL Server local. Se reintentara Supabase cuando haya conexion.");
+        }
+        return true;
+      }
+
+      await clearOfflinePendingSync(saveResult.state ?? payload);
       setPendingCloudSync(false);
+
+      if (saveResult.merged && saveResult.addedFromCloud
+        && (saveResult.addedFromCloud.products > 0 || saveResult.addedFromCloud.transactions > 0)) {
+        setNotice(
+          `Sincronizado con la nube (+${saveResult.addedFromCloud.products} producto(s), `
+          + `+${saveResult.addedFromCloud.transactions} venta(s) nuevas).`,
+        );
+      }
+
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -242,7 +295,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setNotice("Los cambios estan guardados localmente, pero no en Supabase. Reintenta cuando puedas.");
       return false;
     }
-  }, [logout, setNotice]);
+  }, [applyInboundSync, logout, setNotice]);
 
   const flushSave = useCallback(async (): Promise<boolean> => {
     if (!isAuthenticated || !isHydrated || isAppLoading || appLoadError) return false;
@@ -281,7 +334,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       saveTimerRef.current = null;
     }
 
-    await sleep(50);
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
     return flushSave();
   }, [isAuthenticated, isHydrated, isAppLoading, appLoadError, flushSave]);
 
@@ -468,18 +523,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!isAuthenticated || !isHydrated) return;
 
     async function trySyncOnline() {
-      if (!pendingCloudSync && !isOfflineMode && !appSaveError) return;
-
-      const reachable = await checkApiReachable();
-      if (!reachable) {
+      const health = await fetchApiHealth();
+      if (!health?.ok) {
         if (!navigator.onLine) setIsOfflineMode(true);
         return;
       }
 
       setIsOfflineMode(false);
-      const synced = await flushSave();
-      if (synced) {
-        setNotice("Datos sincronizados con Supabase.");
+
+      if (!pendingCloudSync && !appSaveError) {
+        return;
+      }
+
+      if (appSaveError) {
+        await flushSave();
+      }
+
+      try {
+        const syncResult = await runBackgroundSync();
+        if (syncResult.state && syncResult.merged) {
+          applyInboundSync(syncResult.state);
+        }
+        if (syncResult.cloudSynced) {
+          setPendingCloudSync(false);
+          setAppSaveError(null);
+          await clearOfflinePendingSync(syncResult.state ?? latestPayloadRef.current);
+        } else if (health.cloudOk && /en curso|tardando/i.test(syncResult.cloudError ?? "")) {
+          // Supabase responde; solo hay otra sincronizacion activa.
+          return;
+        } else if (syncResult.cloudError) {
+          setPendingCloudSync(true);
+        } else if (health.cloudOk) {
+          setPendingCloudSync(false);
+          setAppSaveError(null);
+        }
+      } catch {
+        // El servidor local sigue operando; el siguiente ciclo reintenta.
       }
     }
 
@@ -497,7 +576,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("online", handleOnline);
       window.clearInterval(interval);
     };
-  }, [isAuthenticated, isHydrated, pendingCloudSync, isOfflineMode, appSaveError, flushSave, setNotice]);
+  }, [
+    isAuthenticated,
+    isHydrated,
+    pendingCloudSync,
+    isOfflineMode,
+    appSaveError,
+    flushSave,
+    applyInboundSync,
+    setNotice,
+  ]);
 
   const appendStockMovements = useCallback((movements: StockMovement[]) => {
     if (movements.length === 0) return;

@@ -97,16 +97,39 @@ export function isRecoverableLoadFailure(error: unknown) {
     || message.includes("http 503");
 }
 
-export async function checkApiReachable() {
+export type ApiHealthStatus = {
+  ok: boolean;
+  mode?: string;
+  cloudOk: boolean;
+};
+
+export async function fetchApiHealth(): Promise<ApiHealthStatus | null> {
   try {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 4000);
+    const timeout = window.setTimeout(() => controller.abort(), 5000);
     const response = await fetch(`${import.meta.env.VITE_API_URL ?? ""}/api/health`, {
       signal: controller.signal,
     });
     window.clearTimeout(timeout);
-    return response.ok;
+    if (!response.ok) return { ok: false, cloudOk: false };
+
+    const data = await response.json() as {
+      ok?: boolean;
+      mode?: string;
+      cloud?: { ok?: boolean };
+    };
+
+    return {
+      ok: data.ok === true,
+      mode: data.mode,
+      cloudOk: data.cloud?.ok === true,
+    };
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function checkApiReachable() {
+  const health = await fetchApiHealth();
+  return health?.ok === true;
 }
